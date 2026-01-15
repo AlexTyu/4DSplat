@@ -1,0 +1,10 @@
+/output/*
+/checkpoints/*
+/video_output/*
+/stereo_output/*
+/input_videos/*
+/sog_output/*
+/node_modules
+/tools/output
+/tools/sog_output
+.DS_Store
