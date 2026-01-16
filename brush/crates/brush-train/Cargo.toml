@@ -1,0 +1,34 @@
+[package]
+name = "brush-train"
+edition.workspace = true
+version.workspace = true
+readme.workspace = true
+license.workspace = true
+
+[features]
+debug-validation = ["brush-render-bwd/debug-validation"]
+
+[dependencies]
+brush-render.path = "../brush-render"
+brush-dataset.path = "../brush-dataset"
+brush-render-bwd.path = "../brush-render-bwd"
+brush-serde.path = "../brush-serde"
+
+anyhow.workspace = true
+image.workspace = true
+clap.workspace = true
+serde.workspace = true
+glam.workspace = true
+rand.workspace = true
+tracing.workspace = true
+log.workspace = true
+hashbrown.workspace = true
+ball-tree.workspace = true
+rayon.workspace = true
+
+tokio = { workspace = true, features = ["io-util", "rt"] }
+burn = { workspace = true, features = ["autodiff"] }
+burn-cubecl.workspace = true
+
+[lints]
+workspace = true

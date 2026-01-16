@@ -1,0 +1,16 @@
+[package]
+name = "lpips-convert"
+edition.workspace = true
+version.workspace = true
+readme.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "lpips-convert"
+path = "src/main.rs"
+
+[dependencies]
+burn.workspace = true
+burn-import.workspace = true
+lpips = { path = "../lpips" }
