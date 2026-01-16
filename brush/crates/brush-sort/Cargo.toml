@@ -1,0 +1,24 @@
+[package]
+name = "brush-sort"
+edition.workspace = true
+version.workspace = true
+readme.workspace = true
+license.workspace = true
+
+[dependencies]
+brush-kernel.path = "../brush-kernel"
+brush-wgsl.path = "../brush-wgsl"
+burn.workspace = true
+bytemuck = { workspace = true, features = ["derive"] }
+burn-wgpu.workspace = true
+burn-cubecl.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+rand.workspace = true
+
+[package.metadata.cargo-shear]
+ignored = ["bytemuck"]
+
+[lints]
+workspace = true
