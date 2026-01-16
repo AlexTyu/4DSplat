@@ -3,7 +3,9 @@
 
 set -eu
 
-ROOT_DIR="/Users/alexanderturin/projects/4DSplat"
+# Get script directory and convert to absolute path
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$SCRIPT_DIR"
 DEFAULT_DEVICE="default"
 
 inputs_file="$(mktemp -t sharp_inputs_list_XXXXXX)"
@@ -71,10 +73,18 @@ fi
 mkdir -p "$output_dir"
 
 if [ -z "$checkpoint" ]; then
-  default_checkpoint="${HOME}/.cache/torch/hub/checkpoints/sharp_2572gikvuh.pt"
-  if [ -f "$default_checkpoint" ]; then
-    checkpoint="$default_checkpoint"
-    echo "Using cached checkpoint: $checkpoint"
+  # Check project checkpoints directory first
+  project_checkpoint="${ROOT_DIR}/checkpoints/sharp_2572gikvuh.pt"
+  if [ -f "$project_checkpoint" ]; then
+    checkpoint="$project_checkpoint"
+    echo "Using project checkpoint: $checkpoint"
+  else
+    # Fallback to default location
+    default_checkpoint="${HOME}/.cache/torch/hub/checkpoints/sharp_2572gikvuh.pt"
+    if [ -f "$default_checkpoint" ]; then
+      checkpoint="$default_checkpoint"
+      echo "Using cached checkpoint: $checkpoint"
+    fi
   fi
 fi
 
@@ -171,13 +181,23 @@ awk -v start="$start_time" -v end="$prep_end" 'BEGIN { printf "Prep time: %.2fs\
 
 if [ -n "$sharp_bin" ]; then
   sharp_exe="$sharp_bin"
+  use_python=0
 else
   sharp_exe="$(command -v sharp || true)"
-fi
-
-if [ -z "$sharp_exe" ]; then
-  echo "sharp executable not found. Install ml-sharp or pass --sharp-bin."
-  exit 1
+  use_python=0
+  # Fallback to Python module if executable not found
+  if [ -z "$sharp_exe" ]; then
+    # Check if ml-sharp is installed locally in project
+    if [ -d "${ROOT_DIR}/ml-sharp/src" ]; then
+      sharp_exe="python"
+      use_python=1
+      # Ensure Python can find the ml-sharp module
+      export PYTHONPATH="${ROOT_DIR}/ml-sharp/src:${PYTHONPATH:-}"
+    else
+      echo "sharp executable not found. Install ml-sharp or pass --sharp-bin."
+      exit 1
+    fi
+  fi
 fi
 
 cmd_time_start="$(date +%s.%N 2>/dev/null || date +%s)"
@@ -235,11 +255,15 @@ if [ -n "$batch_size" ] && [ "$batch_size" -gt 0 ] && [ "$image_count" -gt "$bat
   if [ -n "$parallel_jobs" ] && [ "$parallel_jobs" -gt 1 ]; then
     # Parallel batch processing
     echo "Processing batches in parallel with $parallel_jobs jobs"
-    export sharp_exe output_dir device checkpoint
+    export sharp_exe output_dir device checkpoint use_python PYTHONPATH
     find "$batch_dirs" -mindepth 1 -maxdepth 1 -type d | sort | \
       xargs -P "$parallel_jobs" -I {} sh -c '
         batch_dir="$1"
-        set -- "$sharp_exe" predict -i "$batch_dir" -o "$output_dir" --device "$device"
+        if [ "$use_python" -eq 1 ]; then
+          set -- "$sharp_exe" -m sharp.cli predict -i "$batch_dir" -o "$output_dir" --device "$device"
+        else
+          set -- "$sharp_exe" predict -i "$batch_dir" -o "$output_dir" --device "$device"
+        fi
         if [ -n "$checkpoint" ]; then
           set -- "$@" -c "$checkpoint"
         fi
@@ -251,7 +275,11 @@ if [ -n "$batch_size" ] && [ "$batch_size" -gt 0 ] && [ "$image_count" -gt "$bat
     batch_num=1
     for batch_dir in $(find "$batch_dirs" -mindepth 1 -maxdepth 1 -type d | sort); do
       echo "Processing batch $batch_num/$total_batches: $(basename "$batch_dir")"
-      set -- "$sharp_exe" predict -i "$batch_dir" -o "$output_dir" --device "$device"
+      if [ "$use_python" -eq 1 ]; then
+        set -- "$sharp_exe" -m sharp.cli predict -i "$batch_dir" -o "$output_dir" --device "$device"
+      else
+        set -- "$sharp_exe" predict -i "$batch_dir" -o "$output_dir" --device "$device"
+      fi
       if [ -n "$checkpoint" ]; then
         set -- "$@" -c "$checkpoint"
       fi
@@ -263,7 +291,11 @@ if [ -n "$batch_size" ] && [ "$batch_size" -gt 0 ] && [ "$image_count" -gt "$bat
   rm -rf "$batch_dirs"
 else
   # Single batch - process all images at once (checkpoint loads once)
-  set -- "$sharp_exe" predict -i "$temp_dir" -o "$output_dir" --device "$device"
+  if [ "$use_python" -eq 1 ]; then
+    set -- "$sharp_exe" -m sharp.cli predict -i "$temp_dir" -o "$output_dir" --device "$device"
+  else
+    set -- "$sharp_exe" predict -i "$temp_dir" -o "$output_dir" --device "$device"
+  fi
   if [ -n "$checkpoint" ]; then
     set -- "$@" -c "$checkpoint"
   fi

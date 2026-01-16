@@ -71,15 +71,32 @@ frame_count=$(ls "$output_dir"/frame_*.jpg 2>/dev/null | wc -l | tr -d ' ')
 # Add EXIF focal length metadata to JPEG frames
 if [ "$frame_count" -gt 0 ]; then
   echo "[EXTRACT] Adding EXIF metadata to frames..."
-  python3 - <<PY
+  python - <<PY
 import os
 import sys
 import site
 
-# Add user site-packages to path
-site.addsitedir(os.path.expanduser("~/Library/Python/3.11/lib/python/site-packages"))
+# Convert Git Bash path to Windows path if needed
+output_dir_raw = "$output_dir"
+output_dir = output_dir_raw
 
-output_dir = "$output_dir"
+# Handle Git Bash path conversion (/c/path -> C:/path)
+# Python on Windows handles forward slashes fine, so convert /c/ to C:/
+if output_dir.startswith("/c/") or output_dir.startswith("/C/"):
+    output_dir = "C:" + output_dir[2:]
+elif output_dir.startswith("/d/") or output_dir.startswith("/D/"):
+    output_dir = "D:" + output_dir[2:]
+elif output_dir.startswith("/"):
+    # Try to convert other drive letters
+    parts = output_dir.split("/")
+    if len(parts) > 1 and len(parts[1]) == 1:
+        drive = parts[1].upper()
+        output_dir = drive + ":" + "/".join(parts[2:])
+
+# Ensure directory exists
+if not os.path.exists(output_dir):
+    os.makedirs(output_dir, exist_ok=True)
+
 focal_length_mm = 30.0  # Default focal length
 
 # Try to use piexif for proper EXIF embedding

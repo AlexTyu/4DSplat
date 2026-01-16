@@ -123,7 +123,9 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-ROOT_DIR="/Users/alexanderturin/projects/4DSplat"
+# Get script directory and convert to absolute path
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$SCRIPT_DIR"
 INPUT_VIDEOS_DIR="${ROOT_DIR}/input_videos"
 OUTPUT_ROOT="${ROOT_DIR}/output"
 
@@ -141,8 +143,8 @@ if [ -z "$input_list" ]; then
 fi
 
 if [ "$DEBUG" -eq 1 ]; then
-  echo "[PIPELINE] DEBUG MODE: Auto-selecting video 6 (fur-micro.mov)"
-  choice=6
+  echo "[PIPELINE] DEBUG MODE: Auto-selecting first video"
+  choice=1
 else
   echo "[PIPELINE] Select input video:"
   i=1
@@ -231,7 +233,7 @@ fi
 fps="$(
   ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate \
     -of default=nw=1:nk=1 "$input_video" \
-  | python3 - <<'PY'
+  | python - <<'PY'
 import sys
 rate = sys.stdin.read().strip()
 if "/" in rate:
@@ -262,7 +264,7 @@ fi
 
 if [ "$frame_count" -gt 0 ]; then
   estimate_seconds="$(
-    python3 - <<PY
+    python - <<PY
 frames = int("$frame_count")
 print(frames * 6)
 PY
