@@ -86,6 +86,22 @@ show_progress() {
   printf "\r[PIPELINE] Progress: [%s] %s%% (%d/%d frames) | Elapsed: %s%s" "$bar" "$percentage" "$current" "$total" "$elapsed_str" "$remaining_str"
 }
 
+# Format seconds into readable time string
+format_time() {
+  local seconds=$1
+  local hours=$((seconds / 3600))
+  local minutes=$(((seconds % 3600) / 60))
+  local secs=$((seconds % 60))
+  
+  if [ "$hours" -gt 0 ]; then
+    printf "%dh %dm %ds" "$hours" "$minutes" "$secs"
+  elif [ "$minutes" -gt 0 ]; then
+    printf "%dm %ds" "$minutes" "$secs"
+  else
+    printf "%ds" "$secs"
+  fi
+}
+
 # Debug mode: skip all prompts and auto-select video 6
 DEBUG="${DEBUG:-0}"
 VERBOSE="${VERBOSE:-0}"
@@ -290,7 +306,7 @@ PY
   mkdir -p "$sharp_batch_dir"
   trap 'rm -rf "$sharp_batch_dir"' EXIT
   
-  batch_size=10
+  batch_size=5
   # Calculate total batches
   total_batches=$(((total_frames + batch_size - 1) / batch_size))
   batch_num=0
@@ -317,6 +333,7 @@ PY
       done
       
       echo "[PIPELINE] Batch $batch_num/$total_batches: Generating PLY files..."
+      ply_start_time="$(date +%s)"
       if [ "$VERBOSE" -eq 1 ]; then
         if ! sh "${ROOT_DIR}/image_to_splat.sh" --input "$sharp_batch_dir" --output "$ply_dir"; then
           echo "[PIPELINE] ERROR: Failed to generate PLY files for batch $batch_num/$total_batches"
@@ -328,8 +345,11 @@ PY
           exit 1
         fi
       fi
+      ply_end_time="$(date +%s)"
+      ply_time=$((ply_end_time - ply_start_time))
       
       echo "[PIPELINE] Batch $batch_num/$total_batches: Generating stereo images..."
+      stereo_start_time="$(date +%s)"
       # Process PLY files directly from ply_dir for this batch
       ply_files_processed=0
       while IFS= read -r f; do
@@ -365,11 +385,20 @@ PY
       done <<EOF
 $batch_frames
 EOF
+      stereo_end_time="$(date +%s)"
+      stereo_time=$((stereo_end_time - stereo_start_time))
       
       if [ "$ply_files_processed" -gt 0 ]; then
         processed_frames=$((processed_frames + ply_files_processed))
+        total_batch_time=$((ply_time + stereo_time))
+        avg_time_per_frame=$(awk "BEGIN {printf \"%.2f\", $total_batch_time / $ply_files_processed}")
+        
         echo ""
         echo "[PIPELINE] Batch $batch_num/$total_batches: Successfully processed $ply_files_processed PLY file(s)"
+        echo "[PIPELINE]   PLY generation: $(format_time $ply_time)"
+        echo "[PIPELINE]   Stereo generation: $(format_time $stereo_time)"
+        echo "[PIPELINE]   Total batch time: $(format_time $total_batch_time)"
+        echo "[PIPELINE]   Average time per frame: ${avg_time_per_frame}s"
         show_progress "$processed_frames" "$total_frames" "$start_time"
         echo ""
       else
@@ -399,19 +428,23 @@ EOF
     done
     
     echo "[PIPELINE] Batch $batch_num/$total_batches: Generating PLY files..."
+    ply_start_time="$(date +%s)"
     if [ "$VERBOSE" -eq 1 ]; then
       if ! sh "${ROOT_DIR}/image_to_splat.sh" --input "$sharp_batch_dir" --output "$ply_dir"; then
-        echo "[PIPELINE] ERROR: Failed to generate PLY files for batch $batch_num"
+        echo "[PIPELINE] ERROR: Failed to generate PLY files for batch $batch_num/$total_batches"
         exit 1
       fi
     else
       if ! sh "${ROOT_DIR}/image_to_splat.sh" --input "$sharp_batch_dir" --output "$ply_dir" >/dev/null 2>&1; then
-        echo "[PIPELINE] ERROR: Failed to generate PLY files for batch $batch_num"
+        echo "[PIPELINE] ERROR: Failed to generate PLY files for batch $batch_num/$total_batches"
         exit 1
       fi
     fi
+    ply_end_time="$(date +%s)"
+    ply_time=$((ply_end_time - ply_start_time))
     
     echo "[PIPELINE] Batch $batch_num/$total_batches: Generating stereo images..."
+    stereo_start_time="$(date +%s)"
     # Process PLY files directly from ply_dir for this batch
     ply_files_processed=0
     while IFS= read -r f; do
@@ -447,16 +480,25 @@ EOF
     done <<EOF
 $batch_frames
 EOF
+    stereo_end_time="$(date +%s)"
+    stereo_time=$((stereo_end_time - stereo_start_time))
     
     if [ "$ply_files_processed" -gt 0 ]; then
       processed_frames=$((processed_frames + ply_files_processed))
+      total_batch_time=$((ply_time + stereo_time))
+      avg_time_per_frame=$(awk "BEGIN {printf \"%.2f\", $total_batch_time / $ply_files_processed}")
+      
       echo ""
-      echo "[PIPELINE] Batch $batch_num: Successfully processed $ply_files_processed PLY file(s)"
+      echo "[PIPELINE] Batch $batch_num/$total_batches: Successfully processed $ply_files_processed PLY file(s)"
+      echo "[PIPELINE]   PLY generation: $(format_time $ply_time)"
+      echo "[PIPELINE]   Stereo generation: $(format_time $stereo_time)"
+      echo "[PIPELINE]   Total batch time: $(format_time $total_batch_time)"
+      echo "[PIPELINE]   Average time per frame: ${avg_time_per_frame}s"
       show_progress "$processed_frames" "$total_frames" "$start_time"
       echo ""
     else
       echo ""
-      echo "[PIPELINE] WARNING: Batch $batch_num: No PLY files found in $ply_dir for this batch"
+      echo "[PIPELINE] WARNING: Batch $batch_num/$total_batches: No PLY files found in $ply_dir for this batch"
       show_progress "$processed_frames" "$total_frames" "$start_time"
       echo ""
     fi
