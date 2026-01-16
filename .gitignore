@@ -8,3 +8,4 @@
 /tools/output
 /tools/sog_output
 .DS_Store
+/tools/node_modules
