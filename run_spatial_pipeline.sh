@@ -7,12 +7,105 @@
 
 set -eu
 
+# Progress bar function
+show_progress() {
+  local current=$1
+  local total=$2
+  local start_time=$3
+  local width=50
+  
+  # Calculate percentage with 2 decimal places
+  local percentage
+  if [ "$total" -gt 0 ]; then
+    percentage=$(awk "BEGIN {printf \"%.2f\", ($current * 100.0) / $total}")
+  else
+    percentage="0.00"
+  fi
+  
+  # Calculate filled and empty bars
+  local filled
+  filled=$(awk "BEGIN {printf \"%.0f\", ($current * $width) / $total}")
+  if [ "$filled" -gt "$width" ]; then
+    filled=$width
+  fi
+  
+  # Calculate elapsed time
+  local current_time
+  current_time="$(date +%s)"
+  local elapsed=$((current_time - start_time))
+  local hours=$((elapsed / 3600))
+  local minutes=$(((elapsed % 3600) / 60))
+  local seconds=$((elapsed % 60))
+  
+  # Format elapsed time
+  local elapsed_str
+  if [ "$hours" -gt 0 ]; then
+    elapsed_str=$(printf "%dh %dm %ds" "$hours" "$minutes" "$seconds")
+  elif [ "$minutes" -gt 0 ]; then
+    elapsed_str=$(printf "%dm %ds" "$minutes" "$seconds")
+  else
+    elapsed_str=$(printf "%ds" "$seconds")
+  fi
+  
+  # Calculate estimated time remaining
+  local remaining_str=""
+  if [ "$current" -gt 0 ] && [ "$elapsed" -gt 0 ]; then
+    local avg_time_per_frame
+    avg_time_per_frame=$(awk "BEGIN {printf \"%.2f\", $elapsed / $current}")
+    local remaining_frames=$((total - current))
+    local remaining_seconds
+    remaining_seconds=$(awk "BEGIN {printf \"%.0f\", $avg_time_per_frame * $remaining_frames}")
+    
+    if [ "$remaining_seconds" -gt 0 ]; then
+      local rem_hours=$((remaining_seconds / 3600))
+      local rem_minutes=$(((remaining_seconds % 3600) / 60))
+      local rem_secs=$((remaining_seconds % 60))
+      
+      if [ "$rem_hours" -gt 0 ]; then
+        remaining_str=$(printf " | ETA: %dh %dm %ds" "$rem_hours" "$rem_minutes" "$rem_secs")
+      elif [ "$rem_minutes" -gt 0 ]; then
+        remaining_str=$(printf " | ETA: %dm %ds" "$rem_minutes" "$rem_secs")
+      else
+        remaining_str=$(printf " | ETA: %ds" "$rem_secs")
+      fi
+    fi
+  fi
+  
+  # Build progress bar
+  local bar=""
+  local i=0
+  while [ $i -lt "$filled" ]; do
+    bar="${bar}█"
+    i=$((i + 1))
+  done
+  while [ $i -lt $width ]; do
+    bar="${bar}░"
+    i=$((i + 1))
+  done
+  
+  printf "\r[PIPELINE] Progress: [%s] %s%% (%d/%d frames) | Elapsed: %s%s" "$bar" "$percentage" "$current" "$total" "$elapsed_str" "$remaining_str"
+}
+
 # Debug mode: skip all prompts and auto-select video 6
 DEBUG="${DEBUG:-0}"
-if [ "$#" -gt 0 ] && [ "$1" = "--debug" ]; then
-  DEBUG=1
-  shift
-fi
+VERBOSE="${VERBOSE:-0}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --debug)
+      DEBUG=1
+      shift
+      ;;
+    --verbose|-v)
+      VERBOSE=1
+      shift
+      ;;
+    *)
+      echo "Unknown argument: $1"
+      echo "Usage: $0 [--debug] [--verbose]"
+      exit 1
+      ;;
+  esac
+done
 
 ROOT_DIR="/Users/alexanderturin/projects/4DSplat"
 INPUT_VIDEOS_DIR="${ROOT_DIR}/input_videos"
@@ -174,7 +267,7 @@ PY
     fi
   fi
 
-  echo "[PIPELINE] Processing frames in batches of 5..."
+  echo "[PIPELINE] Processing frames in batches..."
   
   # Get list of frame files
   frame_list="$(ls -1 "$frames_dir"/frame_*.jpg 2>/dev/null | sort || true)"
@@ -183,15 +276,27 @@ PY
     exit 1
   fi
   
+  # Count total frames for progress tracking
+  total_frames=0
+  for _ in $frame_list; do
+    total_frames=$((total_frames + 1))
+  done
+  
+  # Record start time for elapsed time tracking
+  start_time="$(date +%s)"
+  
   # Create single sharp_batch folder in tmp
   sharp_batch_dir="${tmp_dir}/sharp_batch"
   mkdir -p "$sharp_batch_dir"
   trap 'rm -rf "$sharp_batch_dir"' EXIT
   
   batch_size=10
+  # Calculate total batches
+  total_batches=$(((total_frames + batch_size - 1) / batch_size))
   batch_num=0
   batch_frames=""
   frame_count=0
+  processed_frames=0
   
   for frame_path in $frame_list; do
     batch_frames="$batch_frames$frame_path
@@ -211,13 +316,20 @@ PY
         fi
       done
       
-      echo "[PIPELINE] Batch $batch_num: Generating PLY files..."
-      if ! sh "${ROOT_DIR}/image_to_splat.sh" --input "$sharp_batch_dir" --output "$ply_dir"; then
-        echo "[PIPELINE] ERROR: Failed to generate PLY files for batch $batch_num"
-        exit 1
+      echo "[PIPELINE] Batch $batch_num/$total_batches: Generating PLY files..."
+      if [ "$VERBOSE" -eq 1 ]; then
+        if ! sh "${ROOT_DIR}/image_to_splat.sh" --input "$sharp_batch_dir" --output "$ply_dir"; then
+          echo "[PIPELINE] ERROR: Failed to generate PLY files for batch $batch_num/$total_batches"
+          exit 1
+        fi
+      else
+        if ! sh "${ROOT_DIR}/image_to_splat.sh" --input "$sharp_batch_dir" --output "$ply_dir" >/dev/null 2>&1; then
+          echo "[PIPELINE] ERROR: Failed to generate PLY files for batch $batch_num/$total_batches"
+          exit 1
+        fi
       fi
       
-      echo "[PIPELINE] Batch $batch_num: Generating stereo images..."
+      echo "[PIPELINE] Batch $batch_num/$total_batches: Generating stereo images..."
       # Process PLY files directly from ply_dir for this batch
       ply_files_processed=0
       while IFS= read -r f; do
@@ -228,10 +340,17 @@ PY
           ply_name="${frame_stem}.ply"
           ply_path="$ply_dir/$ply_name"
           if [ -f "$ply_path" ]; then
-            echo "[PIPELINE] Batch $batch_num: Processing $ply_name..."
-            if ! KEEP_PLY="$KEEP_PLY" sh "${ROOT_DIR}/ply_to_stereo.sh" --input "$ply_path" --output "$stereo_dir"; then
-              echo "[PIPELINE] ERROR: Failed to generate stereo images for $ply_name"
-              exit 1
+            echo "[PIPELINE] Batch $batch_num/$total_batches: Processing $ply_name..."
+            if [ "$VERBOSE" -eq 1 ]; then
+              if ! KEEP_PLY="$KEEP_PLY" sh "${ROOT_DIR}/ply_to_stereo.sh" --input "$ply_path" --output "$stereo_dir"; then
+                echo "[PIPELINE] ERROR: Failed to generate stereo images for $ply_name"
+                exit 1
+              fi
+            else
+              if ! KEEP_PLY="$KEEP_PLY" sh "${ROOT_DIR}/ply_to_stereo.sh" --input "$ply_path" --output "$stereo_dir" >/dev/null 2>&1; then
+                echo "[PIPELINE] ERROR: Failed to generate stereo images for $ply_name"
+                exit 1
+              fi
             fi
             ply_files_processed=$((ply_files_processed + 1))
             
@@ -248,9 +367,16 @@ $batch_frames
 EOF
       
       if [ "$ply_files_processed" -gt 0 ]; then
-        echo "[PIPELINE] Batch $batch_num: Successfully processed $ply_files_processed PLY file(s)"
+        processed_frames=$((processed_frames + ply_files_processed))
+        echo ""
+        echo "[PIPELINE] Batch $batch_num/$total_batches: Successfully processed $ply_files_processed PLY file(s)"
+        show_progress "$processed_frames" "$total_frames" "$start_time"
+        echo ""
       else
-        echo "[PIPELINE] WARNING: Batch $batch_num: No PLY files found in $ply_dir for this batch"
+        echo ""
+        echo "[PIPELINE] WARNING: Batch $batch_num/$total_batches: No PLY files found in $ply_dir for this batch"
+        show_progress "$processed_frames" "$total_frames" "$start_time"
+        echo ""
       fi
       
       batch_frames=""
@@ -272,13 +398,20 @@ EOF
       fi
     done
     
-    echo "[PIPELINE] Batch $batch_num: Generating PLY files..."
-    if ! sh "${ROOT_DIR}/image_to_splat.sh" --input "$sharp_batch_dir" --output "$ply_dir"; then
-      echo "[PIPELINE] ERROR: Failed to generate PLY files for batch $batch_num"
-      exit 1
+    echo "[PIPELINE] Batch $batch_num/$total_batches: Generating PLY files..."
+    if [ "$VERBOSE" -eq 1 ]; then
+      if ! sh "${ROOT_DIR}/image_to_splat.sh" --input "$sharp_batch_dir" --output "$ply_dir"; then
+        echo "[PIPELINE] ERROR: Failed to generate PLY files for batch $batch_num"
+        exit 1
+      fi
+    else
+      if ! sh "${ROOT_DIR}/image_to_splat.sh" --input "$sharp_batch_dir" --output "$ply_dir" >/dev/null 2>&1; then
+        echo "[PIPELINE] ERROR: Failed to generate PLY files for batch $batch_num"
+        exit 1
+      fi
     fi
     
-    echo "[PIPELINE] Batch $batch_num: Generating stereo images..."
+    echo "[PIPELINE] Batch $batch_num/$total_batches: Generating stereo images..."
     # Process PLY files directly from ply_dir for this batch
     ply_files_processed=0
     while IFS= read -r f; do
@@ -290,9 +423,16 @@ EOF
         ply_path="$ply_dir/$ply_name"
         if [ -f "$ply_path" ]; then
           echo "[PIPELINE] Batch $batch_num: Processing $ply_name..."
-          if ! KEEP_PLY="$KEEP_PLY" sh "${ROOT_DIR}/ply_to_stereo.sh" --input "$ply_path" --output "$stereo_dir"; then
-            echo "[PIPELINE] ERROR: Failed to generate stereo images for $ply_name"
-            exit 1
+          if [ "$VERBOSE" -eq 1 ]; then
+            if ! KEEP_PLY="$KEEP_PLY" sh "${ROOT_DIR}/ply_to_stereo.sh" --input "$ply_path" --output "$stereo_dir"; then
+              echo "[PIPELINE] ERROR: Failed to generate stereo images for $ply_name"
+              exit 1
+            fi
+          else
+            if ! KEEP_PLY="$KEEP_PLY" sh "${ROOT_DIR}/ply_to_stereo.sh" --input "$ply_path" --output "$stereo_dir" >/dev/null 2>&1; then
+              echo "[PIPELINE] ERROR: Failed to generate stereo images for $ply_name"
+              exit 1
+            fi
           fi
           ply_files_processed=$((ply_files_processed + 1))
           
@@ -309,14 +449,22 @@ $batch_frames
 EOF
     
     if [ "$ply_files_processed" -gt 0 ]; then
+      processed_frames=$((processed_frames + ply_files_processed))
+      echo ""
       echo "[PIPELINE] Batch $batch_num: Successfully processed $ply_files_processed PLY file(s)"
+      show_progress "$processed_frames" "$total_frames" "$start_time"
+      echo ""
     else
+      echo ""
       echo "[PIPELINE] WARNING: Batch $batch_num: No PLY files found in $ply_dir for this batch"
+      show_progress "$processed_frames" "$total_frames" "$start_time"
+      echo ""
     fi
   fi
   
   rm -rf "$sharp_batch_dir"
-  echo "[PIPELINE] Completed processing $batch_num batches"
+  echo ""
+  echo "[PIPELINE] Completed processing $batch_num batches ($processed_frames/$total_frames frames)"
 fi
 
 echo "[PIPELINE] Rendering videos for each eye..."
