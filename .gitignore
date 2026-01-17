@@ -9,3 +9,4 @@
 /tools/sog_output
 .DS_Store
 /tools/node_modules
+*.ply

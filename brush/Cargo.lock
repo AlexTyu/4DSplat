@@ -1340,6 +1340,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "brush-visionos"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "brush-serde",
+ "log",
+ "objc",
+ "tokio",
+]
+
+[[package]]
 name = "brush-wgsl"
 version = "0.3.0"
 dependencies = [
