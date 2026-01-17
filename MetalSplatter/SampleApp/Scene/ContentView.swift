@@ -136,19 +136,26 @@ struct ContentView: View {
                 for path in possiblePaths {
                     if let path = path, FileManager.default.fileExists(atPath: path.path) {
                         plyDirectory = path
+                        print("Found ply_frames directory at: \(path.path)")
                         break
                     }
                 }
                 
                 guard let directory = plyDirectory else {
                     print("Error: Could not find ply_frames directory in bundle")
+                    print("Checked paths:")
+                    for path in possiblePaths {
+                        if let path = path {
+                            print("  - \(path.path): exists=\(FileManager.default.fileExists(atPath: path.path))")
+                        }
+                    }
                     return
                 }
                 
                 // Find all PLY files and get the last one
                 let fileManager = FileManager.default
                 guard let files = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else {
-                    print("Error: Cannot read directory")
+                    print("Error: Cannot read directory: \(directory.path)")
                     return
                 }
                 
@@ -165,10 +172,19 @@ struct ContentView: View {
                         return name1 < name2
                     }
                 
+                print("Found \(plyFiles.count) PLY files")
+                
                 if let lastFrame = plyFiles.last {
-                    openWindow(value: ModelIdentifier.gaussianSplat(lastFrame))
+                    print("Loading last frame: \(lastFrame.lastPathComponent)")
+                    print("Full path: \(lastFrame.path)")
+                    print("File exists: \(FileManager.default.fileExists(atPath: lastFrame.path))")
+                    
+                    // Ensure it's a file URL
+                    let fileURL = lastFrame.isFileURL ? lastFrame : URL(fileURLWithPath: lastFrame.path)
+                    openWindow(value: ModelIdentifier.gaussianSplat(fileURL))
                 } else {
-                    print("Error: No PLY files found in directory")
+                    print("Error: No PLY files found in directory: \(directory.path)")
+                    print("Total files in directory: \(files.count)")
                 }
             }
             .padding()

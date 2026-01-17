@@ -250,14 +250,31 @@ final class AnimatedSplatRenderer: @unchecked Sendable, ModelRenderer {
         frameURLs = plyFiles
         frameData = []
         
-        // Load all frames
-        for url in plyFiles {
-            // Use filtered reader that only processes vertex elements
-            // This works around SplatPLYSceneReader's limitation with multi-element PLY files
-            let reader = FilteredVertexPLYReader(url: url)
-            var buffer = SplatMemoryBuffer()
-            try await buffer.read(from: reader)
-            frameData.append(buffer)
+        // Load all frames concurrently for faster initialization
+        try await withThrowingTaskGroup(of: (Int, SplatMemoryBuffer).self) { group in
+            // Start loading all frames in parallel
+            for (index, url) in plyFiles.enumerated() {
+                group.addTask {
+                    // Use filtered reader that only processes vertex elements
+                    // This works around SplatPLYSceneReader's limitation with multi-element PLY files
+                    let reader = FilteredVertexPLYReader(url: url)
+                    var buffer = SplatMemoryBuffer()
+                    try await buffer.read(from: reader)
+                    return (index, buffer)
+                }
+            }
+            
+            // Collect results and maintain frame order
+            var loadedFrames: [(Int, SplatMemoryBuffer)] = []
+            for try await result in group {
+                loadedFrames.append(result)
+            }
+            
+            // Sort by index to maintain frame order
+            loadedFrames.sort { $0.0 < $1.0 }
+            
+            // Extract buffers in order
+            frameData = loadedFrames.map { $0.1 }
         }
         
         // Initialize both renderers with first frame (double buffering)

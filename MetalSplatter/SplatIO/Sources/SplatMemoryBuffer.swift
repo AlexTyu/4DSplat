@@ -1,6 +1,6 @@
 import Foundation
 
-public struct SplatMemoryBuffer {
+public struct SplatMemoryBuffer: Sendable {
     public var points: [SplatScenePoint] = []
 
     public init() {}

@@ -136,15 +136,18 @@ final class VisionSceneRenderer: @unchecked Sendable {
                                                 axis: Constants.rotationAxis)
         }
         
-        // For animated splats, position 0.5 meters forward from eye
+        // For animated splats, position 0.5 meters forward from eye and 1 meter higher
         // For other models, use the default distance
         let zTranslation: Float
+        let yTranslation: Float
         if case .animatedSplat = model {
             zTranslation = -0.5 // Move 0.5 meters forward (negative Z is forward in right-handed coordinates)
+            yTranslation = 1.0 // Move 1 meter higher
         } else {
             zTranslation = Constants.modelCenterZ
+            yTranslation = 0.0
         }
-        let translationMatrix = matrix4x4_translation(0.0, 0.0, zTranslation)
+        let translationMatrix = matrix4x4_translation(0.0, yTranslation, zTranslation)
         // Turn common 3D GS PLY files rightside-up. This isn't generally meaningful, it just
         // happens to be a useful default for the most common datasets at the moment.
         // For animated splats, rotate 180 degrees around X axis to flip upside down
