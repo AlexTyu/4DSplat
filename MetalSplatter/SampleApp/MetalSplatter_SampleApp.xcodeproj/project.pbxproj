@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		317ABC3E2F1B333500361540 /* AnimatedSplatRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317ABC3D2F1B333500361540 /* AnimatedSplatRenderer.swift */; };
+		317ABD3B2F1B868E00361540 /* FrameNavigationManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 317ABD3A2F1B868E00361540 /* FrameNavigationManager.swift */; };
 		610347D92B46864500693CE3 /* SampleApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791DF62B41551F00302B57 /* SampleApp.swift */; };
 		610347DA2B46874500693CE3 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791DF72B41551F00302B57 /* ContentView.swift */; };
 		610347DB2B46875700693CE3 /* VisionSceneRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61791E0C2B41683500302B57 /* VisionSceneRenderer.swift */; };
@@ -29,6 +30,7 @@
 
 /* Begin PBXFileReference section */
 		317ABC3D2F1B333500361540 /* AnimatedSplatRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnimatedSplatRenderer.swift; sourceTree = "<group>"; };
+		317ABD3A2F1B868E00361540 /* FrameNavigationManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameNavigationManager.swift; sourceTree = "<group>"; };
 		610347D82B46861E00693CE3 /* ContentStageConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentStageConfiguration.swift; sourceTree = "<group>"; };
 		61791DC32B41514300302B57 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		61791DDA2B4154FB00302B57 /* SplatRenderer+ModelRenderer.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = "SplatRenderer+ModelRenderer.swift"; sourceTree = "<group>"; };
@@ -68,6 +70,7 @@
 		610347DF2B4689DB00693CE3 /* Model */ = {
 			isa = PBXGroup;
 			children = (
+				317ABD3A2F1B868E00361540 /* FrameNavigationManager.swift */,
 				317ABC3D2F1B333500361540 /* AnimatedSplatRenderer.swift */,
 				61791DDB2B4154FB00302B57 /* ModelIdentifier.swift */,
 				61791DDE2B4154FB00302B57 /* ModelRenderer.swift */,
@@ -224,6 +227,7 @@
 				610347D92B46864500693CE3 /* SampleApp.swift in Sources */,
 				61791E102B41688000302B57 /* MetalKitSceneRenderer.swift in Sources */,
 				61791DE02B4154FB00302B57 /* SplatRenderer+ModelRenderer.swift in Sources */,
+				317ABD3B2F1B868E00361540 /* FrameNavigationManager.swift in Sources */,
 				61791DE82B4154FB00302B57 /* ModelRenderer.swift in Sources */,
 				61791DCF2B41544300302B57 /* Assets.xcassets in Sources */,
 				317ABC3E2F1B333500361540 /* AnimatedSplatRenderer.swift in Sources */,

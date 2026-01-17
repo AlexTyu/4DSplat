@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct ContentView: View {
     @State private var isPickingFile = false
+    @ObservedObject private var frameNavigationManager = FrameNavigationManager.shared
 
 #if os(macOS)
     @Environment(\.openWindow) private var openWindow
@@ -123,8 +124,8 @@ struct ContentView: View {
 
             Spacer()
 
-            Button("Load Last Frame (Static)") {
-                // Find the last frame from ply_frames directory
+            Button("Load Single Frame") {
+                // Try multiple possible locations for the PLY files
                 let possiblePaths = [
                     Bundle.main.resourceURL?.appendingPathComponent("ply_frames"),
                     Bundle.main.resourceURL?.appendingPathComponent("Resources/ply_frames"),
@@ -132,60 +133,25 @@ struct ContentView: View {
                     Bundle.main.bundleURL.appendingPathComponent("Resources/ply_frames"),
                 ]
                 
-                var plyDirectory: URL?
                 for path in possiblePaths {
                     if let path = path, FileManager.default.fileExists(atPath: path.path) {
-                        plyDirectory = path
-                        print("Found ply_frames directory at: \(path.path)")
-                        break
+                        openWindow(value: ModelIdentifier.singleFrameSplat(path))
+                        return
                     }
                 }
                 
-                guard let directory = plyDirectory else {
-                    print("Error: Could not find ply_frames directory in bundle")
-                    print("Checked paths:")
-                    for path in possiblePaths {
-                        if let path = path {
-                            print("  - \(path.path): exists=\(FileManager.default.fileExists(atPath: path.path))")
-                        }
+                // If not found, try to find any .ply files in the bundle
+                if let resourceURL = Bundle.main.resourceURL {
+                    let fileManager = FileManager.default
+                    if let files = try? fileManager.contentsOfDirectory(at: resourceURL, includingPropertiesForKeys: nil),
+                       let plyFile = files.first(where: { $0.pathExtension.lowercased() == "ply" }) {
+                        // Use the directory containing the first PLY file
+                        openWindow(value: ModelIdentifier.singleFrameSplat(plyFile.deletingLastPathComponent()))
+                        return
                     }
-                    return
                 }
                 
-                // Find all PLY files and get the last one
-                let fileManager = FileManager.default
-                guard let files = try? fileManager.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else {
-                    print("Error: Cannot read directory: \(directory.path)")
-                    return
-                }
-                
-                let plyFiles = files.filter { $0.pathExtension.lowercased() == "ply" }
-                    .sorted { url1, url2 in
-                        // Sort by frame number if files are named like frame_000001.ply
-                        let name1 = url1.deletingPathExtension().lastPathComponent
-                        let name2 = url2.deletingPathExtension().lastPathComponent
-                        if name1.hasPrefix("frame_") && name2.hasPrefix("frame_") {
-                            let num1 = Int(name1.dropFirst(6)) ?? 0
-                            let num2 = Int(name2.dropFirst(6)) ?? 0
-                            return num1 < num2
-                        }
-                        return name1 < name2
-                    }
-                
-                print("Found \(plyFiles.count) PLY files")
-                
-                if let lastFrame = plyFiles.last {
-                    print("Loading last frame: \(lastFrame.lastPathComponent)")
-                    print("Full path: \(lastFrame.path)")
-                    print("File exists: \(FileManager.default.fileExists(atPath: lastFrame.path))")
-                    
-                    // Ensure it's a file URL
-                    let fileURL = lastFrame.isFileURL ? lastFrame : URL(fileURLWithPath: lastFrame.path)
-                    openWindow(value: ModelIdentifier.gaussianSplat(fileURL))
-                } else {
-                    print("Error: No PLY files found in directory: \(directory.path)")
-                    print("Total files in directory: \(files.count)")
-                }
+                print("Error: Could not find ply_frames directory in bundle")
             }
             .padding()
             .buttonStyle(.borderedProminent)
@@ -207,6 +173,28 @@ struct ContentView: View {
             Spacer()
 
 #if os(visionOS)
+            // Frame navigation buttons (only shown for single frame splat)
+            if frameNavigationManager.isSingleFrameMode {
+                HStack(spacing: 20) {
+                    Button("Previous Frame") {
+                        Task {
+                            await frameNavigationManager.previousFrame()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!immersiveSpaceIsShown)
+                    
+                    Button("Next Frame") {
+                        Task {
+                            await frameNavigationManager.nextFrame()
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!immersiveSpaceIsShown)
+                }
+                .padding()
+            }
+            
             Button("Dismiss Immersive Space") {
                 Task {
                     await dismissImmersiveSpace()

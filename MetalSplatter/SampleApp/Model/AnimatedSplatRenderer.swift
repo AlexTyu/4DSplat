@@ -6,7 +6,7 @@ import PLYIO
 
 /// A filtered PLY reader that only processes vertex elements, skipping other element types
 /// This works around SplatPLYSceneReader's limitation with multi-element PLY files
-class FilteredVertexPLYReader: SplatSceneReader {
+private class FilteredVertexPLYReader: SplatSceneReader {
     private let url: URL
     
     init(url: URL) {
@@ -185,20 +185,17 @@ final class AnimatedSplatRenderer: @unchecked Sendable, ModelRenderer {
     private let maxViewCount: Int
     private let maxSimultaneousRenders: Int
     
-    // Double buffering: two renderers, one visible while the other updates
-    private var rendererA: SplatRenderer?
-    private var rendererB: SplatRenderer?
-    private var activeRendererIndex: Int = 0 // 0 = rendererA, 1 = rendererB
+    private var splatRenderer: SplatRenderer?
     private var frameData: [SplatMemoryBuffer] = []
     private var frameURLs: [URL] = []
     private let frameIndexQueue = DispatchQueue(label: "com.metalsplatter.animated.frameIndex")
+    private let navigationQueue = DispatchQueue(label: "com.metalsplatter.animated.navigation", qos: .userInitiated)
     private var currentFrameIndex: Int = 0
     private var renderedFrameIndex: Int = -1
     private var lastFrameUpdateTime: Date?
-    private let fps: Double = 10.0 // Can increase FPS now with double buffering
+    private let fps: Double = 30.0
     private var isPaused: Bool = false
-    private var isUpdatingFrame: Bool = false // Prevent concurrent frame updates
-    private var lastFrameUpdateCompletionTime: Date? // Track when last update completed
+    private var navigationTask: Task<Void, Never>?
     
     init(device: MTLDevice,
          colorFormat: MTLPixelFormat,
@@ -216,7 +213,7 @@ final class AnimatedSplatRenderer: @unchecked Sendable, ModelRenderer {
     
     /// Load all PLY files from a directory
     @MainActor
-    func loadFrames(from directory: URL) async throws {
+    func loadFrames(from directory: URL, paused: Bool = false) async throws {
         let fileManager = FileManager.default
         
         // Check if directory exists
@@ -250,57 +247,61 @@ final class AnimatedSplatRenderer: @unchecked Sendable, ModelRenderer {
         frameURLs = plyFiles
         frameData = []
         
-        // Load all frames concurrently for faster initialization
-        try await withThrowingTaskGroup(of: (Int, SplatMemoryBuffer).self) { group in
-            // Start loading all frames in parallel
-            for (index, url) in plyFiles.enumerated() {
-                group.addTask {
-                    // Use filtered reader that only processes vertex elements
-                    // This works around SplatPLYSceneReader's limitation with multi-element PLY files
-                    let reader = FilteredVertexPLYReader(url: url)
-                    var buffer = SplatMemoryBuffer()
-                    try await buffer.read(from: reader)
-                    return (index, buffer)
-                }
+        if paused {
+            // Load only first frame (single frame mode)
+            guard let firstFile = plyFiles.first else {
+                throw NSError(domain: "AnimatedSplatRenderer", code: 4,
+                             userInfo: [NSLocalizedDescriptionKey: "No PLY files found"])
             }
             
-            // Collect results and maintain frame order
-            var loadedFrames: [(Int, SplatMemoryBuffer)] = []
-            for try await result in group {
-                loadedFrames.append(result)
+            let reader = FilteredVertexPLYReader(url: firstFile)
+            var buffer = SplatMemoryBuffer()
+            try await buffer.read(from: reader)
+            
+            guard !buffer.points.isEmpty else {
+                throw NSError(domain: "AnimatedSplatRenderer", code: 7,
+                             userInfo: [NSLocalizedDescriptionKey: "No points loaded from \(firstFile.lastPathComponent)"])
             }
             
-            // Sort by index to maintain frame order
-            loadedFrames.sort { $0.0 < $1.0 }
+            print("Loaded \(buffer.points.count) points from \(firstFile.lastPathComponent)")
+            frameData.append(buffer)
             
-            // Extract buffers in order
-            frameData = loadedFrames.map { $0.1 }
+            // Set paused state
+            isPaused = true
+        } else {
+            // Load all frames for animation
+            for url in plyFiles {
+                // Use filtered reader that only processes vertex elements
+                // This works around SplatPLYSceneReader's limitation with multi-element PLY files
+                let reader = FilteredVertexPLYReader(url: url)
+                var buffer = SplatMemoryBuffer()
+                try await buffer.read(from: reader)
+                frameData.append(buffer)
+            }
         }
         
-        // Initialize both renderers with first frame (double buffering)
-        if let firstFrame = frameData.first {
-            rendererA = try SplatRenderer(device: device,
-                                           colorFormat: colorFormat,
-                                           depthFormat: depthFormat,
-                                           sampleCount: sampleCount,
-                                           maxViewCount: maxViewCount,
-                                           maxSimultaneousRenders: maxSimultaneousRenders)
-            try await rendererA?.add(firstFrame.points)
-            
-            // Initialize rendererB with first frame too (will be updated before use)
-            rendererB = try SplatRenderer(device: device,
-                                           colorFormat: colorFormat,
-                                           depthFormat: depthFormat,
-                                           sampleCount: sampleCount,
-                                           maxViewCount: maxViewCount,
-                                           maxSimultaneousRenders: maxSimultaneousRenders)
-            try await rendererB?.add(firstFrame.points)
+        // Initialize renderer with first frame
+        guard let firstFrame = frameData.first else {
+            throw NSError(domain: "AnimatedSplatRenderer", code: 5,
+                         userInfo: [NSLocalizedDescriptionKey: "No frame data loaded"])
         }
+        
+        guard !firstFrame.points.isEmpty else {
+            throw NSError(domain: "AnimatedSplatRenderer", code: 6,
+                         userInfo: [NSLocalizedDescriptionKey: "Frame contains no points"])
+        }
+        
+        splatRenderer = try SplatRenderer(device: device,
+                                          colorFormat: colorFormat,
+                                          depthFormat: depthFormat,
+                                          sampleCount: sampleCount,
+                                          maxViewCount: maxViewCount,
+                                          maxSimultaneousRenders: maxSimultaneousRenders)
+        try await splatRenderer?.add(firstFrame.points)
         
         frameIndexQueue.sync {
             currentFrameIndex = 0
             renderedFrameIndex = 0
-            activeRendererIndex = 0 // Start with rendererA
         }
         lastFrameUpdateTime = Date()
     }
@@ -328,55 +329,43 @@ final class AnimatedSplatRenderer: @unchecked Sendable, ModelRenderer {
             lastFrameUpdateTime = now
             
             // Update renderer with new frame if it changed
-            // With double buffering, we can update more frequently
-            let needsUpdate = frameIndexQueue.sync { () -> Bool in
-                return frameToRender != renderedFrameIndex
+            let (needsUpdate, frame) = frameIndexQueue.sync { () -> (Bool, SplatMemoryBuffer?) in
+                let needsUpdate = frameToRender != renderedFrameIndex
+                guard needsUpdate && frameToRender < frameData.count else {
+                    return (false, nil)
+                }
+                return (true, frameData[frameToRender])
             }
             
-            if needsUpdate {
-                frameIndexQueue.sync {
-                    isUpdatingFrame = true
-                }
+            if needsUpdate, let frame = frame {
                 Task {
-                    await updateRendererFrame(frameIndex: frameToRender)
-                    frameIndexQueue.sync {
-                        isUpdatingFrame = false
-                    }
+                    await updateRendererFrame(frameIndex: frameToRender, frame: frame)
                 }
             }
         }
     }
     
-    private func updateRendererFrame(frameIndex: Int) async {
-        guard frameIndex < frameData.count else { return }
+    private func updateRendererFrame(frameIndex: Int, frame: SplatMemoryBuffer) async {
+        guard let renderer = splatRenderer else { return }
         
-        let frame = frameData[frameIndex]
-        
-        // Determine which renderer to update (the inactive one)
-        let inactiveRendererIndex = frameIndexQueue.sync { () -> Int in
-            // Get the inactive renderer (the one not currently visible)
-            return activeRendererIndex == 0 ? 1 : 0
-        }
-        
-        guard let inactiveRenderer = inactiveRendererIndex == 0 ? rendererA : rendererB else {
-            print("Error: Inactive renderer not available")
+        // Check if task was cancelled
+        if Task.isCancelled {
             return
         }
         
         do {
-            // Update the inactive renderer with the new frame
-            // No need for delays since we're updating the inactive renderer
-            await inactiveRenderer.reset()
-            try await inactiveRenderer.add(frame.points)
+            await renderer.reset()
             
-            // Switch to the updated renderer
-            frameIndexQueue.sync {
-                activeRendererIndex = inactiveRendererIndex
-                renderedFrameIndex = frameIndex
+            // Check again after reset (in case cancelled during reset)
+            if Task.isCancelled {
+                return
             }
             
-            // Track when update completed
-            lastFrameUpdateCompletionTime = Date()
+            try await renderer.add(frame.points)
+            
+            frameIndexQueue.sync {
+                renderedFrameIndex = frameIndex
+            }
         } catch {
             print("Error updating frame: \(error)")
         }
@@ -396,6 +385,128 @@ final class AnimatedSplatRenderer: @unchecked Sendable, ModelRenderer {
         }
     }
     
+    /// Navigate to next frame (for single frame mode)
+    func nextFrame() async {
+        await withCheckedContinuation { continuation in
+            navigationQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume()
+                    return
+                }
+                
+                // Cancel any pending navigation
+                self.navigationTask?.cancel()
+                
+                guard !self.frameURLs.isEmpty else {
+                    continuation.resume()
+                    return
+                }
+                
+                let nextIndex = self.frameIndexQueue.sync { () -> Int in
+                    let newIndex = (self.currentFrameIndex + 1) % self.frameURLs.count
+                    self.currentFrameIndex = newIndex
+                    return newIndex
+                }
+                
+                self.navigationTask = Task { [weak self] in
+                    guard let self = self else {
+                        continuation.resume()
+                        return
+                    }
+                    await self.loadFrame(at: nextIndex)
+                    continuation.resume()
+                }
+            }
+        }
+    }
+    
+    /// Navigate to previous frame (for single frame mode)
+    func previousFrame() async {
+        await withCheckedContinuation { continuation in
+            navigationQueue.async { [weak self] in
+                guard let self = self else {
+                    continuation.resume()
+                    return
+                }
+                
+                // Cancel any pending navigation
+                self.navigationTask?.cancel()
+                
+                guard !self.frameURLs.isEmpty else {
+                    continuation.resume()
+                    return
+                }
+                
+                let prevIndex = self.frameIndexQueue.sync { () -> Int in
+                    let newIndex = (self.currentFrameIndex - 1 + self.frameURLs.count) % self.frameURLs.count
+                    self.currentFrameIndex = newIndex
+                    return newIndex
+                }
+                
+                self.navigationTask = Task { [weak self] in
+                    guard let self = self else {
+                        continuation.resume()
+                        return
+                    }
+                    await self.loadFrame(at: prevIndex)
+                    continuation.resume()
+                }
+            }
+        }
+    }
+    
+    /// Load a specific frame by index (for single frame mode)
+    private func loadFrame(at index: Int) async {
+        guard index >= 0 && index < frameURLs.count else { return }
+        
+        // Check if frame needs to be loaded (synchronized check)
+        let needsLoad = frameIndexQueue.sync { () -> Bool in
+            index >= frameData.count
+        }
+        
+        // If frame is not loaded, load it on demand
+        if needsLoad {
+            guard index < frameURLs.count else { return }
+            let url = frameURLs[index]
+            do {
+                let reader = FilteredVertexPLYReader(url: url)
+                var buffer = SplatMemoryBuffer()
+                try await buffer.read(from: reader)
+                
+                guard !buffer.points.isEmpty else {
+                    print("Warning: Frame \(index) contains no points")
+                    return
+                }
+                
+                // Expand frameData array if needed (synchronized)
+                frameIndexQueue.sync {
+                    while frameData.count <= index {
+                        frameData.append(SplatMemoryBuffer())
+                    }
+                    frameData[index] = buffer
+                }
+                print("Loaded frame \(index) on demand: \(buffer.points.count) points")
+            } catch {
+                print("Error loading frame \(index): \(error)")
+                return
+            }
+        }
+        
+        // Get frame data and update index (synchronized)
+        let (frame, frameIndex) = frameIndexQueue.sync { () -> (SplatMemoryBuffer?, Int) in
+            currentFrameIndex = index
+            guard index < frameData.count else { return (nil, index) }
+            return (frameData[index], index)
+        }
+        
+        guard let frame = frame else {
+            print("Error: Frame \(index) not available")
+            return
+        }
+        
+        await updateRendererFrame(frameIndex: frameIndex, frame: frame)
+    }
+    
     // MARK: - ModelRenderer
     
     @discardableResult
@@ -406,14 +517,9 @@ final class AnimatedSplatRenderer: @unchecked Sendable, ModelRenderer {
                 rasterizationRateMap: MTLRasterizationRateMap?,
                 renderTargetArrayLength: Int,
                 to commandBuffer: MTLCommandBuffer) throws -> Bool {
+        guard let renderer = splatRenderer else { return false }
+        
         updateAnimation()
-        
-        // Get the active renderer (the one currently visible)
-        let activeRenderer = frameIndexQueue.sync { () -> SplatRenderer? in
-            return activeRendererIndex == 0 ? rendererA : rendererB
-        }
-        
-        guard let renderer = activeRenderer else { return false }
         
         let remappedViewports = viewports.map { viewport -> SplatRenderer.ViewportDescriptor in
             SplatRenderer.ViewportDescriptor(viewport: viewport.viewport,

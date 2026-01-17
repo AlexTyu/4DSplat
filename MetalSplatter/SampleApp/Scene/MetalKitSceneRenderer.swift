@@ -7,8 +7,6 @@ import os
 import SampleBoxRenderer
 import simd
 import SwiftUI
-import SplatIO
-import PLYIO
 
 @MainActor
 class MetalKitSceneRenderer: NSObject, MTKViewDelegate {
@@ -57,29 +55,25 @@ class MetalKitSceneRenderer: NSObject, MTKViewDelegate {
                                           sampleCount: metalKitView.sampleCount,
                                           maxViewCount: 1,
                                           maxSimultaneousRenders: Constants.maxSimultaneousRenders)
-            // Try standard reader first, fall back to FilteredVertexPLYReader for multi-element PLY files
-            do {
-                try await splat.read(from: url)
-            } catch {
-                // If standard reader fails (e.g., multi-element PLY), try FilteredVertexPLYReader
-                if url.pathExtension.lowercased() == "ply" {
-                    let reader = FilteredVertexPLYReader(url: url)
-                    var buffer = SplatMemoryBuffer()
-                    try await buffer.read(from: reader)
-                    try await splat.add(buffer.points)
-                } else {
-                    throw error
-                }
-            }
+            try await splat.read(from: url)
             modelRenderer = splat
         case .animatedSplat(let url):
             let animatedSplat = try AnimatedSplatRenderer(device: device,
-                                                          colorFormat: metalKitView.colorPixelFormat,
-                                                          depthFormat: metalKitView.depthStencilPixelFormat,
-                                                          sampleCount: metalKitView.sampleCount,
-                                                          maxViewCount: 1,
-                                                          maxSimultaneousRenders: Constants.maxSimultaneousRenders)
+                                                         colorFormat: metalKitView.colorPixelFormat,
+                                                         depthFormat: metalKitView.depthStencilPixelFormat,
+                                                         sampleCount: metalKitView.sampleCount,
+                                                         maxViewCount: 1,
+                                                         maxSimultaneousRenders: Constants.maxSimultaneousRenders)
             try await animatedSplat.loadFrames(from: url)
+            modelRenderer = animatedSplat
+        case .singleFrameSplat(let url):
+            let animatedSplat = try AnimatedSplatRenderer(device: device,
+                                                         colorFormat: metalKitView.colorPixelFormat,
+                                                         depthFormat: metalKitView.depthStencilPixelFormat,
+                                                         sampleCount: metalKitView.sampleCount,
+                                                         maxViewCount: 1,
+                                                         maxSimultaneousRenders: Constants.maxSimultaneousRenders)
+            try await animatedSplat.loadFrames(from: url, paused: true)
             modelRenderer = animatedSplat
         case .sampleBox:
             modelRenderer = try! SampleBoxRenderer(device: device,
@@ -103,28 +97,31 @@ class MetalKitSceneRenderer: NSObject, MTKViewDelegate {
         let rotationMatrix: simd_float4x4
         if case .animatedSplat = model {
             rotationMatrix = matrix_identity_float4x4 // No rotation
+        } else if case .singleFrameSplat = model {
+            rotationMatrix = matrix_identity_float4x4 // No rotation
         } else {
             rotationMatrix = matrix4x4_rotation(radians: Float(rotation.radians),
                                                 axis: Constants.rotationAxis)
         }
         
-        // For animated splats, position 0.5 meters forward from eye and 1 meter higher
+        // For animated splats, position 1 meter forward from eye
         // For other models, use the default distance
         let zTranslation: Float
-        let yTranslation: Float
         if case .animatedSplat = model {
-            zTranslation = -0.5 // Move 0.5 meters forward (negative Z is forward in right-handed coordinates)
-            yTranslation = 1.0 // Move 1 meter higher
+            zTranslation = -1.0 // Move 1 meter forward (negative Z is forward in right-handed coordinates)
+        } else if case .singleFrameSplat = model {
+            zTranslation = -1.0 // Move 1 meter forward (negative Z is forward in right-handed coordinates)
         } else {
             zTranslation = Constants.modelCenterZ
-            yTranslation = 0.0
         }
-        let translationMatrix = matrix4x4_translation(0.0, yTranslation, zTranslation)
+        let translationMatrix = matrix4x4_translation(0.0, 0.0, zTranslation)
         // Turn common 3D GS PLY files rightside-up. This isn't generally meaningful, it just
         // happens to be a useful default for the most common datasets at the moment.
         // For animated splats, rotate 180 degrees around X axis to flip upside down
         let commonUpCalibration: simd_float4x4
         if case .animatedSplat = model {
+            commonUpCalibration = matrix4x4_rotation(radians: .pi, axis: SIMD3<Float>(1, 0, 0)) // Rotate around X axis (flip upside down)
+        } else if case .singleFrameSplat = model {
             commonUpCalibration = matrix4x4_rotation(radians: .pi, axis: SIMD3<Float>(1, 0, 0)) // Rotate around X axis (flip upside down)
         } else {
             commonUpCalibration = matrix4x4_rotation(radians: .pi, axis: SIMD3<Float>(0, 0, 1))
@@ -141,6 +138,9 @@ class MetalKitSceneRenderer: NSObject, MTKViewDelegate {
     private func updateRotation() {
         // Don't auto-rotate animated splats - allow hand manipulation instead
         if case .animatedSplat = model {
+            return
+        }
+        if case .singleFrameSplat = model {
             return
         }
         

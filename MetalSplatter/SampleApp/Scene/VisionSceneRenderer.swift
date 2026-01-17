@@ -7,8 +7,6 @@ import os
 import SampleBoxRenderer
 import simd
 import SwiftUI
-import SplatIO
-import PLYIO
 
 extension LayerRenderer.Clock.Instant.Duration {
     var timeInterval: TimeInterval {
@@ -57,8 +55,12 @@ final class VisionSceneRenderer: @unchecked Sendable {
         Task {
             do {
                 try await renderer.load(model)
+                print("Model loaded successfully: \(model?.description ?? "nil")")
             } catch {
                 log.error("Error loading model: \(error.localizedDescription)")
+                print("ERROR loading model: \(error)")
+                // Don't start render loop if loading failed
+                return
             }
             renderer.startRenderLoop()
         }
@@ -77,21 +79,12 @@ final class VisionSceneRenderer: @unchecked Sendable {
                                           sampleCount: 1,
                                           maxViewCount: layerRenderer.properties.viewCount,
                                           maxSimultaneousRenders: Constants.maxSimultaneousRenders)
-            // Try standard reader first, fall back to FilteredVertexPLYReader for multi-element PLY files
-            do {
-                try await splat.read(from: url)
-            } catch {
-                // If standard reader fails (e.g., multi-element PLY), try FilteredVertexPLYReader
-                if url.pathExtension.lowercased() == "ply" {
-                    let reader = FilteredVertexPLYReader(url: url)
-                    var buffer = SplatMemoryBuffer()
-                    try await buffer.read(from: reader)
-                    try await splat.add(buffer.points)
-                } else {
-                    throw error
-                }
-            }
+            try await splat.read(from: url)
             modelRenderer = splat
+            // Clear renderer registration for non-animated splats
+            Task { @MainActor in
+                FrameNavigationManager.shared.registerRenderer(nil, isSingleFrame: false)
+            }
         case .animatedSplat(let url):
             let animatedSplat = try AnimatedSplatRenderer(device: device,
                                                           colorFormat: layerRenderer.configuration.colorFormat,
@@ -101,6 +94,23 @@ final class VisionSceneRenderer: @unchecked Sendable {
                                                           maxSimultaneousRenders: Constants.maxSimultaneousRenders)
             try await animatedSplat.loadFrames(from: url)
             modelRenderer = animatedSplat
+            // Register renderer but not in single frame mode
+            Task { @MainActor in
+                FrameNavigationManager.shared.registerRenderer(animatedSplat, isSingleFrame: false)
+            }
+        case .singleFrameSplat(let url):
+            let animatedSplat = try AnimatedSplatRenderer(device: device,
+                                                         colorFormat: layerRenderer.configuration.colorFormat,
+                                                         depthFormat: layerRenderer.configuration.depthFormat,
+                                                         sampleCount: 1,
+                                                         maxViewCount: layerRenderer.properties.viewCount,
+                                                         maxSimultaneousRenders: Constants.maxSimultaneousRenders)
+            try await animatedSplat.loadFrames(from: url, paused: true)
+            modelRenderer = animatedSplat
+            // Register renderer for frame navigation
+            Task { @MainActor in
+                FrameNavigationManager.shared.registerRenderer(animatedSplat, isSingleFrame: true)
+            }
         case .sampleBox:
             modelRenderer = try SampleBoxRenderer(device: device,
                                                   colorFormat: layerRenderer.configuration.colorFormat,
@@ -108,7 +118,15 @@ final class VisionSceneRenderer: @unchecked Sendable {
                                                   sampleCount: 1,
                                                   maxViewCount: layerRenderer.properties.viewCount,
                                                   maxSimultaneousRenders: Constants.maxSimultaneousRenders)
+            // Clear renderer registration for sample box
+            Task { @MainActor in
+                FrameNavigationManager.shared.registerRenderer(nil, isSingleFrame: false)
+            }
         case .none:
+            // Clear renderer registration when no model
+            Task { @MainActor in
+                FrameNavigationManager.shared.registerRenderer(nil, isSingleFrame: false)
+            }
             break
         }
     }
@@ -131,28 +149,31 @@ final class VisionSceneRenderer: @unchecked Sendable {
         let rotationMatrix: simd_float4x4
         if case .animatedSplat = model {
             rotationMatrix = matrix_identity_float4x4 // No rotation
+        } else if case .singleFrameSplat = model {
+            rotationMatrix = matrix_identity_float4x4 // No rotation
         } else {
             rotationMatrix = matrix4x4_rotation(radians: Float(rotation.radians),
                                                 axis: Constants.rotationAxis)
         }
         
-        // For animated splats, position 0.5 meters forward from eye and 1 meter higher
+        // For animated splats, position 1 meter forward from eye
         // For other models, use the default distance
         let zTranslation: Float
-        let yTranslation: Float
         if case .animatedSplat = model {
-            zTranslation = -0.5 // Move 0.5 meters forward (negative Z is forward in right-handed coordinates)
-            yTranslation = 1.0 // Move 1 meter higher
+            zTranslation = -1.0 // Move 1 meter forward (negative Z is forward in right-handed coordinates)
+        } else if case .singleFrameSplat = model {
+            zTranslation = -1.0 // Move 1 meter forward (negative Z is forward in right-handed coordinates)
         } else {
             zTranslation = Constants.modelCenterZ
-            yTranslation = 0.0
         }
-        let translationMatrix = matrix4x4_translation(0.0, yTranslation, zTranslation)
+        let translationMatrix = matrix4x4_translation(0.0, 0.0, zTranslation)
         // Turn common 3D GS PLY files rightside-up. This isn't generally meaningful, it just
         // happens to be a useful default for the most common datasets at the moment.
         // For animated splats, rotate 180 degrees around X axis to flip upside down
         let commonUpCalibration: simd_float4x4
         if case .animatedSplat = model {
+            commonUpCalibration = matrix4x4_rotation(radians: .pi, axis: SIMD3<Float>(1, 0, 0)) // Rotate around X axis (flip upside down)
+        } else if case .singleFrameSplat = model {
             commonUpCalibration = matrix4x4_rotation(radians: .pi, axis: SIMD3<Float>(1, 0, 0)) // Rotate around X axis (flip upside down)
         } else {
             commonUpCalibration = matrix4x4_rotation(radians: .pi, axis: SIMD3<Float>(0, 0, 1))
@@ -175,6 +196,9 @@ final class VisionSceneRenderer: @unchecked Sendable {
     private func updateRotation() {
         // Don't auto-rotate animated splats - allow hand manipulation instead
         if case .animatedSplat = model {
+            return
+        }
+        if case .singleFrameSplat = model {
             return
         }
         
@@ -229,13 +253,17 @@ final class VisionSceneRenderer: @unchecked Sendable {
 
             let didRender: Bool
             do {
-                didRender = try modelRenderer?.render(viewports: viewports,
-                                                      colorTexture: drawable.colorTextures[0],
-                                                      colorStoreAction: .store,
-                                                      depthTexture: drawable.depthTextures[0],
-                                                      rasterizationRateMap: drawable.rasterizationRateMaps.first,
-                                                      renderTargetArrayLength: layerRenderer.configuration.layout == .layered ? drawable.views.count : 1,
-                                                      to: commandBuffer) ?? false
+                if let modelRenderer = modelRenderer {
+                    didRender = try modelRenderer.render(viewports: viewports,
+                                                          colorTexture: drawable.colorTextures[0],
+                                                          colorStoreAction: .store,
+                                                          depthTexture: drawable.depthTextures[0],
+                                                          rasterizationRateMap: drawable.rasterizationRateMaps.first,
+                                                          renderTargetArrayLength: layerRenderer.configuration.layout == .layered ? drawable.views.count : 1,
+                                                          to: commandBuffer)
+                } else {
+                    didRender = false
+                }
             } catch {
                 Self.log.error("Unable to render scene: \(error.localizedDescription)")
                 didRender = false
