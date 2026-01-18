@@ -1,0 +1,6 @@
+data
+datafolder
+myoutdir
+__pycache__
+img/face*
+plot_outputs

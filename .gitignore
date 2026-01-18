@@ -12,3 +12,5 @@
 *.ply
 /photos
 /DSplat/SampleApp/App/ply_frames/thumbnails
+/DSplat/SampleApp/App/thumbnails
+MLFocalLengths/checkpoints/model.pt

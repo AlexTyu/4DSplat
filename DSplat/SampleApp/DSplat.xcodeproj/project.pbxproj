@@ -52,6 +52,7 @@
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		317ABC452F1B34B800361540 /* ply_frames */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = ply_frames; sourceTree = "<group>"; };
+		317AC3332F1CF26F00361540 /* thumbnails */ = {isa = PBXFileSystemSynchronizedRootGroup; explicitFileTypes = {}; explicitFolders = (); path = thumbnails; sourceTree = "<group>"; };
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -109,6 +110,7 @@
 				317ABC452F1B34B800361540 /* ply_frames */,
 				61791E112B416DCF00302B57 /* Constants.swift */,
 				61791DF62B41551F00302B57 /* SampleApp.swift */,
+				317AC3332F1CF26F00361540 /* thumbnails */,
 			);
 			path = App;
 			sourceTree = "<group>";
@@ -159,6 +161,7 @@
 			);
 			fileSystemSynchronizedGroups = (
 				317ABC452F1B34B800361540 /* ply_frames */,
+				317AC3332F1CF26F00361540 /* thumbnails */,
 			);
 			name = DSplat;
 			packageProductDependencies = (

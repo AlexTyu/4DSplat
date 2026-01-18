@@ -72,7 +72,20 @@ struct FramesGalleryView: View {
         
         Task {
             let fileManager = FileManager.default
-            let thumbnailsDir = plyDirectoryURL.appendingPathComponent("thumbnails")
+            // Thumbnails are now in App/thumbnails (root of App folder)
+            // Try multiple possible locations for thumbnails
+            let possibleThumbnailPaths: [URL] = [
+                Bundle.main.bundleURL.appendingPathComponent("App/thumbnails"),
+                Bundle.main.resourceURL?.appendingPathComponent("thumbnails"),
+                Bundle.main.resourceURL?.appendingPathComponent("App/thumbnails"),
+                Bundle.main.bundleURL.appendingPathComponent("thumbnails"),
+                plyDirectoryURL.appendingPathComponent("thumbnails"), // Fallback to ply_frames/thumbnails
+            ].compactMap { $0 }
+            
+            print("FramesGalleryView: Checking thumbnail paths:")
+            for path in possibleThumbnailPaths {
+                print("FramesGalleryView:   - \(path.path)")
+            }
             
             // Get all PLY files - use same approach as AnimatedSplatRenderer
             print("FramesGalleryView: Reading directory: \(plyDirectoryURL.path)")
@@ -117,13 +130,23 @@ struct FramesGalleryView: View {
             
             // Build thumbnail map if thumbnails directory exists
             var thumbnailMap: [String: URL] = [:]
-            let thumbnailsPath = thumbnailsDir.path
-            print("FramesGalleryView: Looking for thumbnails at: \(thumbnailsPath)")
             print("FramesGalleryView: PLY directory: \(plyDirectoryURL.path)")
             
-            if fileManager.fileExists(atPath: thumbnailsPath) {
-                print("FramesGalleryView: Thumbnails directory exists")
-                if let thumbnailFiles = try? fileManager.contentsOfDirectory(at: thumbnailsDir, includingPropertiesForKeys: nil) {
+            // Try each possible thumbnail path until we find one that exists
+            var actualThumbnailsDir: URL? = nil
+            for thumbnailsPath in possibleThumbnailPaths {
+                let pathString = thumbnailsPath.path
+                if fileManager.fileExists(atPath: pathString) {
+                    actualThumbnailsDir = thumbnailsPath
+                    print("FramesGalleryView: ✓ Found thumbnails at: \(pathString)")
+                    break
+                } else {
+                    print("FramesGalleryView: ✗ Thumbnails not found at: \(pathString)")
+                }
+            }
+            
+            if let actualThumbnailsDir = actualThumbnailsDir {
+                if let thumbnailFiles = try? fileManager.contentsOfDirectory(at: actualThumbnailsDir, includingPropertiesForKeys: nil) {
                     print("FramesGalleryView: Found \(thumbnailFiles.count) files in thumbnails directory")
                     // Map by base name (without extension) to support both .jpg and .png
                     for thumbnailFile in thumbnailFiles {
@@ -132,18 +155,9 @@ struct FramesGalleryView: View {
                         if ext == "jpg" || ext == "jpeg" || ext == "png" {
                             let baseName = (fileName as NSString).deletingPathExtension
                             
-                            // Try to get bundle URL if this is a bundle resource
-                            var finalURL = thumbnailFile
-                            if let bundleURL = Bundle.main.url(forResource: baseName, withExtension: ext, subdirectory: "ply_frames/thumbnails") {
-                                print("FramesGalleryView: Found bundle URL for \(baseName).\(ext)")
-                                finalURL = bundleURL
-                            } else if let bundleURL = Bundle.main.url(forResource: baseName, withExtension: ext, subdirectory: "App/ply_frames/thumbnails") {
-                                print("FramesGalleryView: Found bundle URL in App/ply_frames/thumbnails for \(baseName).\(ext)")
-                                finalURL = bundleURL
-                            }
-                            
-                            thumbnailMap[baseName] = finalURL
-                            print("FramesGalleryView: Mapped thumbnail \(baseName) -> \(finalURL.path)")
+                            // Use the file URL directly - it should work if the directory was found
+                            thumbnailMap[baseName] = thumbnailFile
+                            print("FramesGalleryView: Mapped thumbnail \(baseName) -> \(thumbnailFile.path)")
                         } else {
                             print("FramesGalleryView: Skipping non-image file: \(fileName)")
                         }
@@ -153,15 +167,9 @@ struct FramesGalleryView: View {
                     print("FramesGalleryView: Failed to read thumbnails directory contents")
                 }
             } else {
-                print("FramesGalleryView: Thumbnails directory does not exist at: \(thumbnailsPath)")
-                // Try to find thumbnails via bundle
-                print("FramesGalleryView: Attempting to find thumbnails via Bundle.main...")
-                if let resourcePath = Bundle.main.resourcePath {
-                    let bundleThumbnailsPath = (resourcePath as NSString).appendingPathComponent("ply_frames/thumbnails")
-                    if fileManager.fileExists(atPath: bundleThumbnailsPath) {
-                        print("FramesGalleryView: Found thumbnails at bundle resource path: \(bundleThumbnailsPath)")
-                    }
-                }
+                print("FramesGalleryView: Thumbnails directory does not exist at any checked location")
+                // Try to load thumbnails via Bundle.main.url for each PLY file
+                print("FramesGalleryView: Attempting to load thumbnails via Bundle.main.url...")
             }
             
             // Create entries for ALL PLY files, with thumbnails if available
@@ -172,12 +180,28 @@ struct FramesGalleryView: View {
                 let baseName = (plyName as NSString).deletingPathExtension
                 
                 // Try to find matching thumbnail by base name (supports .jpg, .jpeg, .png)
-                let thumbnailURL = thumbnailMap[baseName]
+                var thumbnailURL = thumbnailMap[baseName]
+                
+                // If not found in map, try Bundle.main.url as fallback
+                if thumbnailURL == nil {
+                    // Try multiple bundle paths
+                    let bundlePaths = ["thumbnails", "App/thumbnails", "ply_frames/thumbnails"]
+                    for bundlePath in bundlePaths {
+                        if let bundleURL = Bundle.main.url(forResource: baseName, withExtension: "jpg", subdirectory: bundlePath) {
+                            thumbnailURL = bundleURL
+                            print("FramesGalleryView: Found thumbnail via Bundle.main.url: \(baseName).jpg in \(bundlePath)")
+                            break
+                        }
+                    }
+                }
+                
                 if let thumbnailURL = thumbnailURL {
                     print("FramesGalleryView: ✓ Found thumbnail for \(plyName) -> \(thumbnailURL.lastPathComponent)")
                 } else {
                     print("FramesGalleryView: ✗ No thumbnail found for \(plyName) (baseName: \(baseName))")
-                    print("FramesGalleryView:   Available thumbnail keys: \(Array(thumbnailMap.keys).sorted().prefix(5))")
+                    if !thumbnailMap.isEmpty {
+                        print("FramesGalleryView:   Available thumbnail keys: \(Array(thumbnailMap.keys).sorted().prefix(5))")
+                    }
                 }
                 matchedThumbnails.append((url: thumbnailURL, plyName: plyName))
             }
@@ -259,45 +283,50 @@ struct ThumbnailView: View {
     var body: some View {
         Button(action: onTap) {
             VStack(spacing: 8) {
-                if let image = image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
+                ZStack {
+                    // Background rectangle
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.gray.opacity(0.2))
                         .frame(width: 150, height: 150)
-                        .clipped()
-                        .cornerRadius(8)
-                } else if imageLoadFailed {
-                    // Show file name when thumbnail is not available
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.3))
-                        .frame(width: 150, height: 150)
-                        .cornerRadius(8)
-                        .overlay {
-                            Text((plyName as NSString).deletingPathExtension)
-                                .font(.caption)
-                                .foregroundColor(.primary)
-                                .multilineTextAlignment(.center)
-                                .padding(4)
-                        }
-                } else {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.3))
-                        .frame(width: 150, height: 150)
-                        .cornerRadius(8)
-                        .overlay {
-                            ProgressView()
-                        }
+                    
+                    if let image = image {
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 150, height: 150)
+                            .clipped()
+                            .cornerRadius(8)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                            }
+                    } else if imageLoadFailed {
+                        // Show file name when thumbnail is not available
+                        Text((plyName as NSString).deletingPathExtension)
+                            .font(.caption)
+                            .foregroundColor(.primary)
+                            .multilineTextAlignment(.center)
+                            .padding(8)
+                            .lineLimit(3)
+                    } else {
+                        ProgressView()
+                            .scaleEffect(1.2)
+                    }
                 }
+                .frame(width: 150, height: 150)
                 
                 Text((plyName as NSString).deletingPathExtension)
                     .font(.caption)
                     .foregroundColor(.primary)
                     .lineLimit(1)
+                    .frame(width: 150)
             }
         }
         .buttonStyle(.plain)
         .onAppear {
-            loadImage()
+            if image == nil && !imageLoadFailed {
+                loadImage()
+            }
         }
     }
     
@@ -331,7 +360,15 @@ struct ThumbnailView: View {
                 // Try alternative: check if it's a bundle resource
                 let fileName = thumbnailURL.lastPathComponent
                 let baseName = (fileName as NSString).deletingPathExtension
-                if let bundleURL = Bundle.main.url(forResource: baseName, withExtension: "jpg", subdirectory: "ply_frames/thumbnails") {
+                // Try App/thumbnails first, then fallback to ply_frames/thumbnails
+                var bundleURL: URL? = Bundle.main.url(forResource: baseName, withExtension: "jpg", subdirectory: "thumbnails")
+                if bundleURL == nil {
+                    bundleURL = Bundle.main.url(forResource: baseName, withExtension: "jpg", subdirectory: "App/thumbnails")
+                }
+                if bundleURL == nil {
+                    bundleURL = Bundle.main.url(forResource: baseName, withExtension: "jpg", subdirectory: "ply_frames/thumbnails")
+                }
+                if let bundleURL = bundleURL {
                     print("ThumbnailView: Found in bundle at: \(bundleURL.path)")
                     await loadImageFromURL(bundleURL)
                 } else {

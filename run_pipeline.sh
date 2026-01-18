@@ -190,6 +190,8 @@ else
   echo "  5. Deploy PLY files to Vision Pro"
   echo "  6. Extract video frames"
   echo "  7. Render ply frames in Brush Viewer"
+  echo "  8. Generate PLY from existing frames"
+  echo "  9. Predict Focal length in Frames"
   printf "Enter number [1]: "
   read -r mode_choice
   mode_choice="${mode_choice:-1}"
@@ -215,6 +217,12 @@ else
     7)
       MODE="render_ply_viewer"
       ;;
+    8)
+      MODE="ply_from_frames"
+      ;;
+    9)
+      MODE="predict_focal_length"
+      ;;
     *)
       echo "[PIPELINE] Invalid selection, using default mode"
       MODE="default"
@@ -229,7 +237,7 @@ fi
 
 # Focal length setting (default 30mm)
 FOCAL_LENGTH="30.0"
-if [ "$MODE" = "default" ] || [ "$MODE" = "single_ply" ] || [ "$MODE" = "ply_frames_only" ] || [ "$MODE" = "extract_frames" ]; then
+if [ "$MODE" = "default" ] || [ "$MODE" = "single_ply" ] || [ "$MODE" = "ply_frames_only" ] || [ "$MODE" = "extract_frames" ] || [ "$MODE" = "ply_from_frames" ]; then
   if [ "$DEBUG" -eq 1 ]; then
     echo "[PIPELINE] DEBUG MODE: Using default focal length 30.0mm"
     FOCAL_LENGTH="30.0"
@@ -724,7 +732,7 @@ PY
 elif [ "$MODE" = "deploy_to_vision_pro" ]; then
   # Deploy PLY files to Vision Pro mode: copy PLY files from project to DSplat
   vision_pro_ply_dir="${ROOT_DIR}/DSplat/SampleApp/App/ply_frames"
-  vision_pro_thumbnails_dir="${vision_pro_ply_dir}/thumbnails"
+  vision_pro_thumbnails_dir="${ROOT_DIR}/DSplat/SampleApp/App/thumbnails"
   
   if [ ! -d "$ply_dir" ]; then
     echo "[PIPELINE] ERROR: PLY directory not found: $ply_dir"
@@ -745,6 +753,31 @@ elif [ "$MODE" = "deploy_to_vision_pro" ]; then
   # Create destination directory if it doesn't exist
   mkdir -p "$vision_pro_ply_dir"
   mkdir -p "$vision_pro_thumbnails_dir"
+  
+  # Ask if user wants to remove existing files
+  existing_files_count=$(ls "$vision_pro_ply_dir"/*.ply 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$existing_files_count" -gt 0 ]; then
+    echo "[PIPELINE] Found $existing_files_count existing PLY file(s) in Vision Pro directory"
+    if [ "$DEBUG" -eq 1 ]; then
+      echo "[PIPELINE] DEBUG MODE: Not removing existing files"
+      REMOVE_EXISTING=0
+    else
+      printf "Remove existing PLY files from Vision Pro directory? [y/N]: "
+      read -r remove_choice
+      remove_choice="$(printf "%s" "$remove_choice" | tr '[:upper:]' '[:lower:]')"
+      if [ "$remove_choice" = "y" ] || [ "$remove_choice" = "yes" ]; then
+        REMOVE_EXISTING=1
+      else
+        REMOVE_EXISTING=0
+      fi
+    fi
+    
+    if [ "$REMOVE_EXISTING" -eq 1 ]; then
+      echo "[PIPELINE] Removing existing PLY files from Vision Pro directory..."
+      rm -f "$vision_pro_ply_dir"/*.ply
+      echo "[PIPELINE] Removed $existing_files_count existing file(s)"
+    fi
+  fi
   
   # Copy PLY files
   copied_count=0
@@ -851,6 +884,280 @@ elif [ "$MODE" = "extract_frames" ]; then
   echo "[PIPELINE] Successfully extracted $frame_count frames"
   echo "[PIPELINE] Frames saved in: $frames_dir"
   echo "[PIPELINE] Focal length metadata: ${FOCAL_LENGTH}mm"
+  echo "[PIPELINE] Done."
+  exit 0
+elif [ "$MODE" = "ply_from_frames" ]; then
+  # Generate PLY from existing frames mode: convert existing frame images to PLY files
+  if [ ! -d "$frames_dir" ]; then
+    echo "[PIPELINE] ERROR: Frames directory not found: $frames_dir"
+    echo "[PIPELINE] Please extract frames first or run mode 6 (Extract video frames)"
+    exit 1
+  fi
+  
+  # Find all image files in frames directory
+  frame_files=$(find "$frames_dir" -maxdepth 1 \( -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" \) -type f | sort)
+  if [ -z "$frame_files" ]; then
+    echo "[PIPELINE] ERROR: No image files found in: $frames_dir"
+    echo "[PIPELINE] Please extract frames first or run mode 6 (Extract video frames)"
+    exit 1
+  fi
+  
+  frame_count=$(echo "$frame_files" | wc -l | tr -d ' ')
+  echo "[PIPELINE] Found $frame_count frame image(s) in: $frames_dir"
+  
+  # Set focal length in existing frames
+  echo "[PIPELINE] Setting focal length to ${FOCAL_LENGTH}mm in existing frames..."
+  if ! sh "${ROOT_DIR}/set_focal_length.sh" --frames-dir "$frames_dir" --focal-length "$FOCAL_LENGTH"; then
+    echo "[PIPELINE] ERROR: Failed to set focal length in frames"
+    exit 1
+  fi
+  
+  mkdir -p "$ply_dir"
+  
+  # Record start time for elapsed time tracking
+  processing_start_time="$(date +%s)"
+  
+  # Process each frame
+  current_frame=0
+  processed_count=0
+  skipped_count=0
+  
+  for frame_file in $frame_files; do
+    current_frame=$((current_frame + 1))
+    frame_filename="$(basename "$frame_file")"
+    frame_basename="${frame_filename%.*}"
+    ply_file="${ply_dir}/${frame_basename}.ply"
+    
+    echo "[PIPELINE] Processing frame: $frame_filename ($current_frame/$frame_count)..."
+    
+    # Check if PLY already exists
+    if [ -f "$ply_file" ]; then
+      echo "[PIPELINE] PLY file already exists, skipping: $frame_basename.ply"
+      skipped_count=$((skipped_count + 1))
+      continue
+    fi
+    
+    # Generate PLY for frame (always verbose in mode 8)
+    echo "[PIPELINE] Generating PLY for: $frame_filename..."
+    if ! sh "${ROOT_DIR}/image_to_splat.sh" --input "$frame_file" --output "$ply_dir"; then
+      echo "[PIPELINE] ERROR: Failed to generate PLY file for $frame_filename"
+      continue
+    fi
+    
+    if [ -f "$ply_file" ]; then
+      echo "[PIPELINE] Successfully generated PLY: $ply_file"
+      processed_count=$((processed_count + 1))
+    else
+      echo "[PIPELINE] ERROR: PLY file not found at expected location: $ply_file"
+    fi
+    
+    echo ""
+  done
+  
+  echo "[PIPELINE] Completed processing $frame_count frame(s)"
+  echo "[PIPELINE]   Generated: $processed_count PLY file(s)"
+  echo "[PIPELINE]   Skipped (already exist): $skipped_count PLY file(s)"
+  echo "[PIPELINE] PLY files saved in: $ply_dir"
+  echo "[PIPELINE] Done."
+  exit 0
+elif [ "$MODE" = "predict_focal_length" ]; then
+  # Predict focal length in frames mode: predict and write focal length to EXIF
+  if [ ! -d "$frames_dir" ]; then
+    echo "[PIPELINE] ERROR: Frames directory not found: $frames_dir"
+    echo "[PIPELINE] Please extract frames first or run mode 6 (Extract video frames)"
+    exit 1
+  fi
+  
+  # Find all image files in frames directory
+  frame_files=$(find "$frames_dir" -maxdepth 1 \( -name "*.jpg" -o -name "*.jpeg" -o -name "*.png" \) -type f | sort)
+  if [ -z "$frame_files" ]; then
+    echo "[PIPELINE] ERROR: No image files found in: $frames_dir"
+    echo "[PIPELINE] Please extract frames first or run mode 6 (Extract video frames)"
+    exit 1
+  fi
+  
+  frame_count=$(echo "$frame_files" | wc -l | tr -d ' ')
+  echo "[PIPELINE] Found $frame_count frame image(s) in: $frames_dir"
+  
+  # Check if MLFocalLengths directory exists
+  MLFOCAL_DIR="${ROOT_DIR}/MLFocalLengths"
+  if [ ! -d "$MLFOCAL_DIR" ]; then
+    echo "[PIPELINE] ERROR: MLFocalLengths directory not found at: $MLFOCAL_DIR"
+    echo "[PIPELINE] Cloning MLFocalLengths repository..."
+    if ! git clone https://github.com/nandometzger/MLFocalLengths.git "$MLFOCAL_DIR"; then
+      echo "[PIPELINE] ERROR: Failed to clone MLFocalLengths repository"
+      exit 1
+    fi
+    echo "[PIPELINE] MLFocalLengths repository cloned successfully"
+  fi
+  
+  # Check if gdown is available (needed for checkpoint download)
+  if ! command -v gdown >/dev/null 2>&1 && ! python3 -c "import gdown" 2>/dev/null; then
+    echo "[PIPELINE] Installing gdown for checkpoint download..."
+    python3 -m pip install --user gdown
+    if [ $? -ne 0 ]; then
+      echo "[PIPELINE] WARNING: Failed to install gdown. Checkpoint may need manual download."
+    else
+      echo "[PIPELINE] gdown installed successfully"
+    fi
+  fi
+  
+  # Check if dependencies are needed and install if missing
+  if ! python3 -c "import piexif" 2>/dev/null; then
+    echo "[PIPELINE] Missing Python dependencies, installing..."
+    echo "[PIPELINE] Installing Python dependencies for focal length prediction..."
+    echo "[PIPELINE] Note: Installing numpy<2 for compatibility with MLFocalLengths..."
+    python3 -m pip install --user "numpy<2" piexif torch torchvision pillow tqdm configargparse opencv-python rawpy exifread matplotlib scikit-learn h5py
+    if [ $? -ne 0 ]; then
+      echo "[PIPELINE] ERROR: Failed to install dependencies"
+      echo "[PIPELINE] You can try installing manually with: pip install --user 'numpy<2' piexif torch torchvision"
+      exit 1
+    fi
+    echo "[PIPELINE] Dependencies installed successfully"
+  else
+    # Check if numpy version is compatible (needs to be < 2.0)
+    numpy_version=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "")
+    if [ -n "$numpy_version" ]; then
+      major_version=$(echo "$numpy_version" | cut -d. -f1)
+      if [ "$major_version" -ge 2 ]; then
+        echo "[PIPELINE] WARNING: NumPy $numpy_version detected, but MLFocalLengths requires NumPy < 2.0"
+        echo "[PIPELINE] Downgrading NumPy to compatible version..."
+        python3 -m pip install --user "numpy<2" --force-reinstall
+        if [ $? -ne 0 ]; then
+          echo "[PIPELINE] ERROR: Failed to downgrade NumPy"
+          echo "[PIPELINE] Please manually install: pip install --user 'numpy<2'"
+          exit 1
+        fi
+        echo "[PIPELINE] NumPy downgraded successfully"
+      fi
+    fi
+  fi
+  
+  echo "[PIPELINE] Predicting focal length for all frames..."
+  echo "[PIPELINE] Note: First run may take longer (downloading model weights if needed)..."
+  echo ""
+  
+  # Run focal length prediction and capture output while showing it in real-time
+  # Use a temp file to capture output while also displaying it
+  temp_output_file=$(mktemp)
+  trap "rm -f '$temp_output_file'" EXIT
+  
+  # Run prediction script, showing output in real-time and saving to file
+  echo "[PIPELINE] Starting prediction (output will appear below)..."
+  echo ""
+  if ! sh "${ROOT_DIR}/predict_focal_length.sh" --input "$frames_dir" 2>&1 | tee "$temp_output_file"; then
+    echo ""
+    echo "[PIPELINE] ERROR: Failed to predict focal length"
+    rm -f "$temp_output_file"
+    trap - EXIT
+    exit 1
+  fi
+  
+  echo ""
+  # Read captured output
+  prediction_output=$(cat "$temp_output_file")
+  rm -f "$temp_output_file"
+  trap - EXIT
+  
+  # Parse predictions from output and write to EXIF
+  echo "[PIPELINE] Writing predicted focal lengths to EXIF metadata..."
+  python3 - <<PY
+import os
+import sys
+import re
+import site
+
+# Add user site-packages to path
+site.addsitedir(os.path.expanduser("~/Library/Python/3.11/lib/python/site-packages"))
+
+frames_dir = "$frames_dir"
+prediction_output = """$prediction_output"""
+
+# Try to use piexif for proper EXIF embedding
+try:
+    import piexif
+    piexif_available = True
+except (ImportError, ModuleNotFoundError) as e:
+    piexif_available = False
+    print(f"ERROR: piexif not available ({e})", file=sys.stderr)
+    sys.exit(1)
+
+# Get list of image files in order
+image_files = []
+for filename in sorted(os.listdir(frames_dir)):
+    if filename.lower().endswith(('.jpg', '.jpeg')):
+        image_files.append(filename)
+
+# Parse predictions from output
+# Format: /path/to/file.jpg Predicted  75.5mm or just "Predicted  75.5mm"
+predictions = []
+for line in prediction_output.split('\n'):
+    # Match lines with "Predicted" and a focal length
+    match = re.search(r'Predicted\s+([\d.]+)mm', line)
+    if match:
+        focal_length = float(match.group(1))
+        predictions.append(focal_length)
+
+# Match predictions to files by order (since predict.py processes them sequentially)
+if len(predictions) != len(image_files):
+    print(f"WARNING: Found {len(predictions)} predictions but {len(image_files)} image files", file=sys.stderr)
+    print("Attempting to match by processing order...", file=sys.stderr)
+
+processed_count = 0
+error_count = 0
+skipped_count = 0
+
+# Process all image files and apply predictions
+for idx, filename in enumerate(image_files):
+    image_path = os.path.join(frames_dir, filename)
+    
+    # Get predicted focal length for this file by index
+    if idx >= len(predictions):
+        skipped_count += 1
+        print(f"Warning: No prediction found for {filename} (index {idx})", file=sys.stderr)
+        continue
+    
+    focal_length_mm = predictions[idx]
+    
+    try:
+        # Read existing EXIF if any
+        try:
+            existing_exif = piexif.load(image_path)
+        except:
+            existing_exif = {"0th": {}, "Exif": {}, "GPS": {}, "1st": {}, "thumbnail": None, "Interop": {}}
+        
+        # Add focal length to EXIF
+        # FocalLength tag is 37386 (0x920A) in EXIF IFD
+        existing_exif["Exif"][37386] = (int(focal_length_mm * 100), 100)  # FocalLength as rational
+        
+        # Convert to bytes and insert into JPEG
+        exif_bytes = piexif.dump(existing_exif)
+        
+        # Insert EXIF directly into JPEG file using piexif
+        piexif.insert(exif_bytes, image_path)
+        processed_count += 1
+        verbose = os.environ.get("VERBOSE", "0") == "1"
+        if verbose:
+            print(f"Set focal length {focal_length_mm}mm for {filename}")
+    except Exception as e:
+        print(f"Warning: Could not add EXIF to {filename}: {e}", file=sys.stderr)
+        error_count += 1
+
+print(f"Processed {processed_count} image(s)")
+if skipped_count > 0:
+    print(f"Skipped {skipped_count} image(s) (no prediction found)", file=sys.stderr)
+if error_count > 0:
+    print(f"Errors: {error_count} image(s)", file=sys.stderr)
+    sys.exit(1)
+PY
+  
+  if [ $? -ne 0 ]; then
+    echo "[PIPELINE] ERROR: Failed to write focal lengths to EXIF"
+    exit 1
+  fi
+  
+  echo "[PIPELINE] Successfully predicted and wrote focal length to EXIF for $frame_count frame(s)"
+  echo "[PIPELINE] Frames directory: $frames_dir"
   echo "[PIPELINE] Done."
   exit 0
 elif [ "$MODE" = "render_ply_viewer" ]; then
