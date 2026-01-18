@@ -59,6 +59,20 @@ struct ContentView: View {
 
             Spacer()
 
+#if os(visionOS)
+            Button("Dismiss Immersive Space") {
+                Task {
+                    await dismissImmersiveSpace()
+                    immersiveSpaceIsShown = false
+                }
+            }
+            .disabled(!immersiveSpaceIsShown)
+            .padding()
+            .buttonStyle(.borderedProminent)
+
+            Spacer()
+#endif
+
             Button("Read Scene File") {
                 isPickingFile = true
             }
@@ -253,14 +267,6 @@ struct ContentView: View {
                     }
                 }
             }
-            
-            Button("Dismiss Immersive Space") {
-                Task {
-                    await dismissImmersiveSpace()
-                    immersiveSpaceIsShown = false
-                }
-            }
-            .disabled(!immersiveSpaceIsShown)
 
             Spacer()
 #endif // os(visionOS)

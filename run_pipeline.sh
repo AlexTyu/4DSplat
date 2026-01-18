@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 # Pipeline steps:
-# 1) Extract frames from the selected video into tmp/frames.
+# 1) Extract frames from the selected video into frames/.
 # 2) Convert frames to PLYs using image_to_splat.sh.
 # 3) Convert PLYs to stereo frames using ply_to_stereo.sh.
 # 4) Convert stereo frames to videos using stereo_frames_to_video.sh.
@@ -185,9 +185,10 @@ else
   echo "[PIPELINE] Select mode:"
   echo "  1. Default (full pipeline)"
   echo "  2. Generate spatial video from existing stereo frames"
-  echo "  3. Generate single PLY using frame number"
+  echo "  3. Generate ply Frames only"
   echo "  4. Generate PLY frames only (time range)"
   echo "  5. Deploy PLY files to Vision Pro"
+  echo "  6. Extract video frames"
   printf "Enter number [1]: "
   read -r mode_choice
   mode_choice="${mode_choice:-1}"
@@ -207,6 +208,9 @@ else
     5)
       MODE="deploy_to_vision_pro"
       ;;
+    6)
+      MODE="extract_frames"
+      ;;
     *)
       echo "[PIPELINE] Invalid selection, using default mode"
       MODE="default"
@@ -214,9 +218,14 @@ else
   esac
 fi
 
+# Set verbose mode for all modes except default (mode 1)
+if [ "$MODE" != "default" ]; then
+  VERBOSE=1
+fi
+
 # Focal length setting (default 30mm)
 FOCAL_LENGTH="30.0"
-if [ "$MODE" = "default" ] || [ "$MODE" = "single_ply" ] || [ "$MODE" = "ply_frames_only" ]; then
+if [ "$MODE" = "default" ] || [ "$MODE" = "single_ply" ] || [ "$MODE" = "ply_frames_only" ] || [ "$MODE" = "extract_frames" ]; then
   if [ "$DEBUG" -eq 1 ]; then
     echo "[PIPELINE] DEBUG MODE: Using default focal length 30.0mm"
     FOCAL_LENGTH="30.0"
@@ -254,46 +263,78 @@ if [ "$MODE" = "default" ]; then
 fi
 
 project_dir="${OUTPUT_ROOT}/${project_name}"
-tmp_dir="${project_dir}/tmp"
-frames_dir="${tmp_dir}/frames"
-ply_dir="${tmp_dir}/ply"
-stereo_dir="${tmp_dir}/stereo_frames"
+frames_dir="${project_dir}/frames"
+ply_dir="${project_dir}/ply"
+stereo_dir="${project_dir}/stereo_frames"
 video_dir="${project_dir}/video_output"
 spatial_output="${video_dir}/spatial_video_spatialmediakit.mov"
 
 # Handle mode-specific logic
 if [ "$MODE" = "single_ply" ]; then
-  # Single PLY mode: ask for frame number
+  # Single PLY mode: ask for frame number(s) - space-separated for multiple frames
   if [ "$DEBUG" -eq 1 ]; then
-    frame_num=1
+    frame_input="1"
     echo "[PIPELINE] DEBUG MODE: Using frame number 1"
   else
-    printf "Enter frame number (0-indexed, first frame is 0): "
-    read -r frame_num
-    case "$frame_num" in
+    printf "Enter frame number(s) (0-indexed, space-separated for multiple, e.g., 0 10 20): "
+    read -r frame_input
+  fi
+  
+  # Parse space-separated frame numbers
+  frame_numbers=""
+  for frame_str in $frame_input; do
+    frame_str="$(echo "$frame_str" | tr -d '[:space:]')"
+    case "$frame_str" in
       *[!0-9]*|"")
-        echo "[PIPELINE] Invalid frame number."
+        echo "[PIPELINE] Invalid frame number: $frame_str"
         exit 1
         ;;
+      *)
+        if [ -z "$frame_numbers" ]; then
+          frame_numbers="$frame_str"
+        else
+          frame_numbers="$frame_numbers $frame_str"
+        fi
+        ;;
     esac
+  done
+  
+  if [ -z "$frame_numbers" ]; then
+    echo "[PIPELINE] ERROR: No valid frame numbers provided"
+    exit 1
   fi
   
   mkdir -p "$frames_dir" "$ply_dir"
   
-  # Extract single frame (ffmpeg uses 0-indexed frames)
-  frame_name="frame_$(printf '%06d' "$frame_num")"
-  echo "[PIPELINE] Extracting frame $frame_num..."
-  ffmpeg -y -i "$input_video" -vf "select=eq(n\,$frame_num)" -vframes 1 -q:v 1 "${frames_dir}/${frame_name}.jpg"
+  # Process each frame
+  total_frames=$(echo "$frame_numbers" | wc -w | tr -d ' ')
+  current_frame=0
+  last_ply_file=""
   
-  if [ ! -f "${frames_dir}/${frame_name}.jpg" ]; then
-    echo "[PIPELINE] ERROR: Failed to extract frame $frame_num"
-    echo "[PIPELINE] Frame may be out of range. Check video frame count."
-    exit 1
-  fi
-  
-  # Add EXIF focal length metadata to extracted frame
-  echo "[PIPELINE] Adding EXIF metadata (focal length: ${FOCAL_LENGTH}mm)..."
-  python3 - <<PY
+  for frame_num in $frame_numbers; do
+    current_frame=$((current_frame + 1))
+    frame_name="frame_$(printf '%06d' "$frame_num")"
+    
+    echo "[PIPELINE] Processing frame $frame_num ($current_frame/$total_frames)..."
+    
+    # Check if frame already exists
+    if [ -f "${frames_dir}/${frame_name}.jpg" ]; then
+      echo "[PIPELINE] Frame $frame_num already exists, skipping extraction"
+    else
+      # Extract frame (ffmpeg uses 0-indexed frames)
+      echo "[PIPELINE] Extracting frame $frame_num..."
+      ffmpeg -y -i "$input_video" -vf "select=eq(n\,$frame_num)" -vframes 1 -q:v 1 "${frames_dir}/${frame_name}.jpg"
+      
+      if [ ! -f "${frames_dir}/${frame_name}.jpg" ]; then
+        echo "[PIPELINE] ERROR: Failed to extract frame $frame_num"
+        echo "[PIPELINE] Frame may be out of range. Check video frame count."
+        continue
+      fi
+    fi
+    
+    # Add EXIF focal length metadata to extracted frame
+    echo "[PIPELINE] Adding EXIF metadata (focal length: ${FOCAL_LENGTH}mm)..."
+    python3 - <<PY
 import os
 import sys
 import site
@@ -332,34 +373,51 @@ if piexif_available:
     except Exception as e:
         print(f"Warning: Could not add EXIF to {jpeg_path}: {e}", file=sys.stderr)
 PY
-  
-  # Generate PLY for single frame (always verbose in mode 3)
-  echo "[PIPELINE] Generating PLY for frame $frame_num..."
-  if ! sh "${ROOT_DIR}/image_to_splat.sh" --input "${frames_dir}/${frame_name}.jpg" --output "$ply_dir"; then
-    echo "[PIPELINE] ERROR: Failed to generate PLY file"
-    exit 1
-  fi
-  
-  ply_file="${ply_dir}/${frame_name}.ply"
-  if [ -f "$ply_file" ]; then
-    echo "[PIPELINE] Successfully generated PLY: $ply_file"
     
-    # Open PLY file with brush viewer
+    # Check if PLY already exists
+    ply_file="${ply_dir}/${frame_name}.ply"
+    if [ -f "$ply_file" ]; then
+      echo "[PIPELINE] PLY file already exists for frame $frame_num, skipping generation"
+      last_ply_file="$ply_file"
+    else
+      # Generate PLY for frame (always verbose in mode 3)
+      echo "[PIPELINE] Generating PLY for frame $frame_num..."
+      if ! sh "${ROOT_DIR}/image_to_splat.sh" --input "${frames_dir}/${frame_name}.jpg" --output "$ply_dir"; then
+        echo "[PIPELINE] ERROR: Failed to generate PLY file for frame $frame_num"
+        continue
+      fi
+      
+      if [ -f "$ply_file" ]; then
+        echo "[PIPELINE] Successfully generated PLY: $ply_file"
+        last_ply_file="$ply_file"
+      else
+        echo "[PIPELINE] ERROR: PLY file not found at expected location: $ply_file"
+      fi
+    fi
+    
+    echo ""
+  done
+  
+  # Summary and open last PLY file with brush viewer
+  if [ -n "$last_ply_file" ]; then
+    echo "[PIPELINE] Completed processing $total_frames frame(s)"
+    
+    # Open last PLY file with brush viewer
     brush_bin="${ROOT_DIR}/brush/target/release/brush"
     if [ -x "$brush_bin" ]; then
-      echo "[PIPELINE] Opening PLY file with brush viewer..."
+      echo "[PIPELINE] Opening last PLY file with brush viewer..."
       cd "${ROOT_DIR}/brush"
-      "$brush_bin" --with-viewer "$ply_file" &
+      "$brush_bin" --with-viewer "$last_ply_file" &
       echo "[PIPELINE] Brush viewer launched in background"
     else
       echo "[PIPELINE] WARNING: Brush binary not found at $brush_bin"
-      echo "[PIPELINE] PLY file saved at: $ply_file"
     fi
     
+    echo "[PIPELINE] PLY files saved in: $ply_dir"
     echo "[PIPELINE] Done."
     exit 0
   else
-    echo "[PIPELINE] ERROR: PLY file not found at expected location: $ply_file"
+    echo "[PIPELINE] ERROR: No PLY files were successfully generated"
     echo "[PIPELINE] Checking for other PLY files in output directory..."
     ls -la "$ply_dir"/*.ply 2>/dev/null || echo "[PIPELINE] No PLY files found in $ply_dir"
     exit 1
@@ -402,18 +460,18 @@ PY
     end_time="${end_time_input:-}"
   fi
   
-  if [ -d "$tmp_dir" ]; then
+  if [ -d "$frames_dir" ] || [ -d "$ply_dir" ]; then
     if [ "$DEBUG" -eq 1 ]; then
-      echo "[PIPELINE] DEBUG MODE: Overwriting existing temp folder"
-      rm -rf "$tmp_dir"
+      echo "[PIPELINE] DEBUG MODE: Overwriting existing project folders"
+      rm -rf "$frames_dir" "$ply_dir"
     else
-      printf "Temp folder already exists for this project. Overwrite? [Y/n]: "
+      printf "Project folders already exist for this project. Overwrite? [Y/n]: "
       read -r overwrite_choice
       overwrite_choice="$(printf "%s" "$overwrite_choice" | tr '[:upper:]' '[:lower:]')"
       if [ -z "$overwrite_choice" ] || [ "$overwrite_choice" = "y" ] || [ "$overwrite_choice" = "yes" ]; then
-        rm -rf "$tmp_dir"
+        rm -rf "$frames_dir" "$ply_dir"
       else
-        echo "[PIPELINE] Keeping existing temp folder."
+        echo "[PIPELINE] Keeping existing project folders."
       fi
     fi
   fi
@@ -554,8 +612,8 @@ PY
   # Record start time for elapsed time tracking
   processing_start_time="$(date +%s)"
   
-  # Create single sharp_batch folder in tmp
-  sharp_batch_dir="${tmp_dir}/sharp_batch"
+  # Create single sharp_batch folder in project
+  sharp_batch_dir="${project_dir}/sharp_batch"
   mkdir -p "$sharp_batch_dir"
   trap 'rm -rf "$sharp_batch_dir"' EXIT
   
@@ -710,6 +768,54 @@ elif [ "$MODE" = "deploy_to_vision_pro" ]; then
     echo "[PIPELINE] ERROR: No files were copied"
     exit 1
   fi
+elif [ "$MODE" = "extract_frames" ]; then
+  # Extract video frames mode: extract frames only with focal length metadata
+  if [ -d "$frames_dir" ]; then
+    if [ "$DEBUG" -eq 1 ]; then
+      echo "[PIPELINE] DEBUG MODE: Overwriting existing frames folder"
+      rm -rf "$frames_dir"
+    else
+      printf "Frames folder already exists for this project. Overwrite? [Y/n]: "
+      read -r overwrite_choice
+      overwrite_choice="$(printf "%s" "$overwrite_choice" | tr '[:upper:]' '[:lower:]')"
+      if [ -z "$overwrite_choice" ] || [ "$overwrite_choice" = "y" ] || [ "$overwrite_choice" = "yes" ]; then
+        rm -rf "$frames_dir"
+      else
+        echo "[PIPELINE] Keeping existing frames folder."
+      fi
+    fi
+  fi
+  
+  mkdir -p "$frames_dir"
+  
+  if ! command -v ffmpeg >/dev/null 2>&1; then
+    echo "[PIPELINE] ffmpeg is required but not found in PATH."
+    exit 1
+  fi
+  
+  if ! command -v ffprobe >/dev/null 2>&1; then
+    echo "[PIPELINE] ffprobe is required but not found in PATH."
+    exit 1
+  fi
+  
+  # Extract frames using extract_video_frames.sh
+  echo "[PIPELINE] Extracting frames from video..."
+  if [ "$VERBOSE" -eq 1 ]; then
+    frame_count=$(sh "${ROOT_DIR}/extract_video_frames.sh" --input "$input_video" --output "$frames_dir" --focal-length "$FOCAL_LENGTH" | tail -n 1)
+  else
+    frame_count=$(sh "${ROOT_DIR}/extract_video_frames.sh" --input "$input_video" --output "$frames_dir" --focal-length "$FOCAL_LENGTH" 2>/dev/null | tail -n 1)
+  fi
+  
+  if [ "$frame_count" -eq 0 ]; then
+    echo "[PIPELINE] ERROR: No frames extracted."
+    exit 1
+  fi
+  
+  echo "[PIPELINE] Successfully extracted $frame_count frames"
+  echo "[PIPELINE] Frames saved in: $frames_dir"
+  echo "[PIPELINE] Focal length metadata: ${FOCAL_LENGTH}mm"
+  echo "[PIPELINE] Done."
+  exit 0
 elif [ "$MODE" = "spatial_from_stereo" ]; then
   # Spatial from stereo mode: check if stereo frames exist
   if [ ! -d "$stereo_dir" ]; then
@@ -763,25 +869,23 @@ PY
 fi
 
 # Default mode: continue with normal pipeline
-if [ -d "$tmp_dir" ]; then
+if [ -d "$frames_dir" ] || [ -d "$ply_dir" ] || [ -d "$stereo_dir" ]; then
   if [ "$DEBUG" -eq 1 ]; then
-    echo "[PIPELINE] DEBUG MODE: Overwriting existing temp folder"
-    rm -rf "$tmp_dir"
+    echo "[PIPELINE] DEBUG MODE: Overwriting existing project folders"
+    rm -rf "$frames_dir" "$ply_dir" "$stereo_dir"
   else
-    printf "Temp folder already exists for this project. Overwrite? [Y/n]: "
+    printf "Project folders already exist for this project. Overwrite? [Y/n]: "
     read -r overwrite_choice
     overwrite_choice="$(printf "%s" "$overwrite_choice" | tr '[:upper:]' '[:lower:]')"
     if [ -z "$overwrite_choice" ] || [ "$overwrite_choice" = "y" ] || [ "$overwrite_choice" = "yes" ]; then
-      rm -rf "$tmp_dir"
+      rm -rf "$frames_dir" "$ply_dir" "$stereo_dir"
     else
-      echo "[PIPELINE] Keeping existing temp folder."
+      echo "[PIPELINE] Keeping existing project folders."
     fi
   fi
 fi
 
 mkdir -p "$frames_dir" "$ply_dir" "$stereo_dir"
-rm -rf "$stereo_dir"
-mkdir -p "$stereo_dir"
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
   echo "[PIPELINE] ffmpeg is required but not found in PATH."
@@ -866,8 +970,8 @@ PY
   # Record start time for elapsed time tracking
   start_time="$(date +%s)"
   
-  # Create single sharp_batch folder in tmp
-  sharp_batch_dir="${tmp_dir}/sharp_batch"
+  # Create single sharp_batch folder in project
+  sharp_batch_dir="${project_dir}/sharp_batch"
   mkdir -p "$sharp_batch_dir"
   trap 'rm -rf "$sharp_batch_dir"' EXIT
   
