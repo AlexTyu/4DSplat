@@ -187,6 +187,7 @@ else
   echo "  2. Generate spatial video from existing stereo frames"
   echo "  3. Generate single PLY using frame number"
   echo "  4. Generate PLY frames only (time range)"
+  echo "  5. Deploy PLY files to Vision Pro"
   printf "Enter number [1]: "
   read -r mode_choice
   mode_choice="${mode_choice:-1}"
@@ -202,6 +203,9 @@ else
       ;;
     4)
       MODE="ply_frames_only"
+      ;;
+    5)
+      MODE="deploy_to_vision_pro"
       ;;
     *)
       echo "[PIPELINE] Invalid selection, using default mode"
@@ -655,6 +659,57 @@ PY
   echo "[PIPELINE] PLY files saved in: $ply_dir"
   echo "[PIPELINE] Done."
   exit 0
+elif [ "$MODE" = "deploy_to_vision_pro" ]; then
+  # Deploy PLY files to Vision Pro mode: copy PLY files from project to MetalSplatter
+  vision_pro_ply_dir="${ROOT_DIR}/MetalSplatter/SampleApp/App/ply_frames"
+  
+  if [ ! -d "$ply_dir" ]; then
+    echo "[PIPELINE] ERROR: PLY directory not found: $ply_dir"
+    echo "[PIPELINE] Please run the pipeline first to generate PLY files for project: $project_name"
+    exit 1
+  fi
+  
+  ply_file_count=$(ls "$ply_dir"/*.ply 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$ply_file_count" -eq 0 ]; then
+    echo "[PIPELINE] ERROR: No PLY files found in: $ply_dir"
+    echo "[PIPELINE] Please run the pipeline first to generate PLY files for project: $project_name"
+    exit 1
+  fi
+  
+  echo "[PIPELINE] Found $ply_file_count PLY file(s) in project: $project_name"
+  echo "[PIPELINE] Deploying to Vision Pro: $vision_pro_ply_dir"
+  
+  # Create destination directory if it doesn't exist
+  mkdir -p "$vision_pro_ply_dir"
+  
+  # Copy PLY files
+  copied_count=0
+  for ply_file in "$ply_dir"/*.ply; do
+    if [ -f "$ply_file" ]; then
+      filename="$(basename "$ply_file")"
+      dest_path="$vision_pro_ply_dir/$filename"
+      
+      if [ "$VERBOSE" -eq 1 ]; then
+        echo "[PIPELINE] Copying: $filename"
+      fi
+      
+      if cp "$ply_file" "$dest_path"; then
+        copied_count=$((copied_count + 1))
+      else
+        echo "[PIPELINE] WARNING: Failed to copy $filename"
+      fi
+    fi
+  done
+  
+  if [ "$copied_count" -gt 0 ]; then
+    echo "[PIPELINE] Successfully deployed $copied_count PLY file(s) to Vision Pro"
+    echo "[PIPELINE] Destination: $vision_pro_ply_dir"
+    echo "[PIPELINE] Done."
+    exit 0
+  else
+    echo "[PIPELINE] ERROR: No files were copied"
+    exit 1
+  fi
 elif [ "$MODE" = "spatial_from_stereo" ]; then
   # Spatial from stereo mode: check if stereo frames exist
   if [ ! -d "$stereo_dir" ]; then
