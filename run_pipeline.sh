@@ -645,7 +645,7 @@ PY
     echo ""
     echo "[PIPELINE] Batch $batch_num/$total_batches: Successfully processed $frame_count PLY file(s)"
     echo "[PIPELINE]   PLY generation: $(format_time $ply_time)"
-    show_progress "$processed_frames" "$total_frames" "$start_time_track"
+    show_progress "$processed_frames" "$total_frames" "$processing_start_time"
     echo ""
   fi
   

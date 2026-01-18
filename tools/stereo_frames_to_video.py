@@ -63,7 +63,7 @@ def create_eye_videos(stereo_dir: Path, video_dir: Path, fps: float) -> tuple[Pa
 
 
 def run_spatial_cli(left_video: Path, right_video: Path, output_path: Path) -> None:
-    script_path = ROOT_DIR / "tools" / "make_spatial_video.sh"
+    script_path = ROOT_DIR / "make_spatial_video.sh"
     subprocess.run(
         [
             "bash",

@@ -66,7 +66,7 @@ ffmpeg -y -framerate "$fps" -i "$input_dir/frame_%06d_left.png" \
 ffmpeg -y -framerate "$fps" -i "$input_dir/frame_%06d_right.png" \
   -c:v libx264 -crf 0 -preset veryslow -pix_fmt yuv420p -r "$fps" "$right_video"
 
-spatial_script="$ROOT_DIR/tools/make_spatial_video.sh"
+spatial_script="$ROOT_DIR/make_spatial_video.sh"
 if [ ! -f "$spatial_script" ]; then
   echo "Spatial video script not found: $spatial_script"
   exit 1
