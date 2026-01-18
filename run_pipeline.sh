@@ -722,8 +722,9 @@ PY
   echo "[PIPELINE] Done."
   exit 0
 elif [ "$MODE" = "deploy_to_vision_pro" ]; then
-  # Deploy PLY files to Vision Pro mode: copy PLY files from project to MetalSplatter
-  vision_pro_ply_dir="${ROOT_DIR}/MetalSplatter/SampleApp/App/ply_frames"
+  # Deploy PLY files to Vision Pro mode: copy PLY files from project to DSplat
+  vision_pro_ply_dir="${ROOT_DIR}/DSplat/SampleApp/App/ply_frames"
+  vision_pro_thumbnails_dir="${vision_pro_ply_dir}/thumbnails"
   
   if [ ! -d "$ply_dir" ]; then
     echo "[PIPELINE] ERROR: PLY directory not found: $ply_dir"
@@ -743,6 +744,7 @@ elif [ "$MODE" = "deploy_to_vision_pro" ]; then
   
   # Create destination directory if it doesn't exist
   mkdir -p "$vision_pro_ply_dir"
+  mkdir -p "$vision_pro_thumbnails_dir"
   
   # Copy PLY files
   copied_count=0
@@ -763,8 +765,39 @@ elif [ "$MODE" = "deploy_to_vision_pro" ]; then
     fi
   done
   
+  # Copy thumbnails if frames directory exists
+  thumbnail_count=0
+  if [ -d "$frames_dir" ]; then
+    echo "[PIPELINE] Copying thumbnails from: $frames_dir"
+    
+    # Match frame images to PLY files
+    for ply_file in "$ply_dir"/*.ply; do
+      if [ -f "$ply_file" ]; then
+        ply_basename="$(basename "$ply_file" .ply)"
+        # Try to find matching frame image (frame_000001.ply -> frame_000001.jpg)
+        frame_image="${frames_dir}/${ply_basename}.jpg"
+        
+        if [ -f "$frame_image" ]; then
+          thumbnail_dest="${vision_pro_thumbnails_dir}/${ply_basename}.jpg"
+          if cp "$frame_image" "$thumbnail_dest"; then
+            thumbnail_count=$((thumbnail_count + 1))
+            if [ "$VERBOSE" -eq 1 ]; then
+              echo "[PIPELINE] Copied thumbnail: $(basename "$thumbnail_dest")"
+            fi
+          fi
+        fi
+      fi
+    done
+  else
+    echo "[PIPELINE] WARNING: Frames directory not found: $frames_dir"
+    echo "[PIPELINE] Skipping thumbnail copy (thumbnails will not be available)"
+  fi
+  
   if [ "$copied_count" -gt 0 ]; then
     echo "[PIPELINE] Successfully deployed $copied_count PLY file(s) to Vision Pro"
+    if [ "$thumbnail_count" -gt 0 ]; then
+      echo "[PIPELINE] Successfully deployed $thumbnail_count thumbnail(s) to Vision Pro"
+    fi
     echo "[PIPELINE] Destination: $vision_pro_ply_dir"
     echo "[PIPELINE] Done."
     exit 0
