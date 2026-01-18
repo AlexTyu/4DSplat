@@ -52,13 +52,7 @@ struct ContentView: View {
 
     @ViewBuilder
     var mainView: some View {
-        VStack {
-            Spacer()
-
-            Text("MetalSplatter SampleApp")
-
-            Spacer()
-
+        VStack(spacing: 12) {
 #if os(visionOS)
             Button("Dismiss Immersive Space") {
                 Task {
@@ -67,16 +61,13 @@ struct ContentView: View {
                 }
             }
             .disabled(!immersiveSpaceIsShown)
-            .padding()
             .buttonStyle(.borderedProminent)
 
-            Spacer()
 #endif
 
             Button("Read Scene File") {
                 isPickingFile = true
             }
-            .padding()
             .buttonStyle(.borderedProminent)
             .disabled(isPickingFile)
 #if os(visionOS)
@@ -86,23 +77,35 @@ struct ContentView: View {
                           allowedContentTypes: [
                             UTType(filenameExtension: "ply")!,
                             UTType(filenameExtension: "splat")!,
-                          ]) {
+                          ]) { result in
                 isPickingFile = false
-                switch $0 {
+                switch result {
                 case .success(let url):
                     _ = url.startAccessingSecurityScopedResource()
-                    Task {
-                        // This is a sample app. In a real app, this should be more tightly scoped, not using a silly timer.
-                        try await Task.sleep(for: .seconds(10))
-                        url.stopAccessingSecurityScopedResource()
+                    
+                    Task { @MainActor in
+                        // Reset frame index for new load
+                        currentSingleFrameIndex = 0
+                        FrameIndexStorage.shared.frameIndex = 0
+                        
+                        // Get the directory containing the selected file
+                        let directoryURL = url.deletingLastPathComponent()
+                        
+                        // Verify directory exists (same check as "Load Frame")
+                        if FileManager.default.fileExists(atPath: directoryURL.path) {
+                            singleFrameDirectoryURL = directoryURL
+                            // Load list of PLY files
+                            loadPLYFileList(from: directoryURL)
+                            // Load as single frame splat (same as "Load Frame")
+                            openWindow(value: ModelIdentifier.singleFrameSplat(directoryURL))
+                        } else {
+                            print("Error: Directory does not exist: \(directoryURL.path)")
+                        }
                     }
-                    openWindow(value: ModelIdentifier.gaussianSplat(url))
                 case .failure:
                     break
                 }
             }
-
-            Spacer()
 
             Button("Load Animated Splat", action: {
                 // Try multiple possible locations for the PLY files
@@ -132,15 +135,12 @@ struct ContentView: View {
                 
                 print("Error: Could not find ply_frames directory in bundle")
             })
-            .padding()
             .buttonStyle(.borderedProminent)
 #if os(visionOS)
             .disabled(immersiveSpaceIsShown)
 #endif
 
-            Spacer()
-
-            Button("Load Single Frame", action: {
+            Button("Load Frame", action: {
                 // Reset frame index for new load
                 currentSingleFrameIndex = 0
                 FrameIndexStorage.shared.frameIndex = 0
@@ -178,24 +178,10 @@ struct ContentView: View {
                 
                 print("Error: Could not find ply_frames directory in bundle")
             })
-            .padding()
             .buttonStyle(.borderedProminent)
 #if os(visionOS)
             .disabled(immersiveSpaceIsShown)
 #endif
-
-            Spacer()
-
-            Button("Show Sample Box") {
-                openWindow(value: ModelIdentifier.sampleBox)
-            }
-            .padding()
-            .buttonStyle(.borderedProminent)
-#if os(visionOS)
-            .disabled(immersiveSpaceIsShown)
-#endif
-
-            Spacer()
 
 #if os(visionOS)
             // Frame navigation buttons (only shown for single frame splat)
@@ -267,10 +253,9 @@ struct ContentView: View {
                     }
                 }
             }
-
-            Spacer()
 #endif // os(visionOS)
         }
+        .padding(8)
     }
     
     private func loadPLYFileList(from directory: URL) {

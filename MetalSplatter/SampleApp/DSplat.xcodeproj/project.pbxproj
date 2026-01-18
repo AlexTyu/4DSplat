@@ -183,7 +183,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 61E3FD7D2AE5CB0200032652 /* Build configuration list for PBXProject "MetalSplatter_SampleApp" */;
+			buildConfigurationList = 61E3FD7D2AE5CB0200032652 /* Build configuration list for PBXProject "DSplat" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -447,7 +447,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		61E3FD7D2AE5CB0200032652 /* Build configuration list for PBXProject "MetalSplatter_SampleApp" */ = {
+		61E3FD7D2AE5CB0200032652 /* Build configuration list for PBXProject "DSplat" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				61E3FD982AE5CB0300032652 /* Debug */,

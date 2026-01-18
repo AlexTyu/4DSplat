@@ -189,6 +189,7 @@ else
   echo "  4. Generate PLY frames only (time range)"
   echo "  5. Deploy PLY files to Vision Pro"
   echo "  6. Extract video frames"
+  echo "  7. Render ply frames in Brush Viewer"
   printf "Enter number [1]: "
   read -r mode_choice
   mode_choice="${mode_choice:-1}"
@@ -210,6 +211,9 @@ else
       ;;
     6)
       MODE="extract_frames"
+      ;;
+    7)
+      MODE="render_ply_viewer"
       ;;
     *)
       echo "[PIPELINE] Invalid selection, using default mode"
@@ -814,6 +818,37 @@ elif [ "$MODE" = "extract_frames" ]; then
   echo "[PIPELINE] Successfully extracted $frame_count frames"
   echo "[PIPELINE] Frames saved in: $frames_dir"
   echo "[PIPELINE] Focal length metadata: ${FOCAL_LENGTH}mm"
+  echo "[PIPELINE] Done."
+  exit 0
+elif [ "$MODE" = "render_ply_viewer" ]; then
+  # Render PLY frames in Brush Viewer mode: open PLY files with brush viewer
+  if [ ! -d "$ply_dir" ]; then
+    echo "[PIPELINE] ERROR: PLY directory not found: $ply_dir"
+    echo "[PIPELINE] Please run the pipeline first to generate PLY files for project: $project_name"
+    exit 1
+  fi
+  
+  ply_file_count=$(ls "$ply_dir"/*.ply 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$ply_file_count" -eq 0 ]; then
+    echo "[PIPELINE] ERROR: No PLY files found in: $ply_dir"
+    echo "[PIPELINE] Please run the pipeline first to generate PLY files for project: $project_name"
+    exit 1
+  fi
+  
+  echo "[PIPELINE] Found $ply_file_count PLY file(s) in project: $project_name"
+  
+  brush_bin="${ROOT_DIR}/brush/target/release/brush"
+  if [ ! -x "$brush_bin" ]; then
+    echo "[PIPELINE] ERROR: Brush binary not found at $brush_bin"
+    echo "[PIPELINE] Please build brush first"
+    exit 1
+  fi
+  
+  echo "[PIPELINE] Opening PLY files with brush viewer..."
+  cd "${ROOT_DIR}/brush"
+  "$brush_bin" --with-viewer "$ply_dir" &
+  echo "[PIPELINE] Brush viewer launched in background"
+  echo "[PIPELINE] PLY directory: $ply_dir"
   echo "[PIPELINE] Done."
   exit 0
 elif [ "$MODE" = "spatial_from_stereo" ]; then
