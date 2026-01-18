@@ -7,6 +7,7 @@ input_video=""
 output_dir=""
 debug=0
 max_frames=""
+focal_length_mm="30.0"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -24,6 +25,10 @@ while [ "$#" -gt 0 ]; do
     --max-frames)
       shift
       max_frames="$1"
+      ;;
+    --focal-length)
+      shift
+      focal_length_mm="$1"
       ;;
     *)
       echo "Unknown argument: $1"
@@ -80,7 +85,7 @@ import site
 site.addsitedir(os.path.expanduser("~/Library/Python/3.11/lib/python/site-packages"))
 
 output_dir = "$output_dir"
-focal_length_mm = 30.0  # Default focal length
+focal_length_mm = float("$focal_length_mm")
 
 # Try to use piexif for proper EXIF embedding
 try:

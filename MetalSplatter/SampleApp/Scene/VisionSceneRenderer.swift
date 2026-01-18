@@ -105,11 +105,16 @@ final class VisionSceneRenderer: @unchecked Sendable {
                                                          sampleCount: 1,
                                                          maxViewCount: layerRenderer.properties.viewCount,
                                                          maxSimultaneousRenders: Constants.maxSimultaneousRenders)
-            try await animatedSplat.loadFrames(from: url, paused: true)
+            // Get target frame index directly from storage (non-MainActor, persists across cycles)
+            let targetFrameIndex = FrameIndexStorage.shared.frameIndex
+            print("VisionSceneRenderer: Loading single frame splat with targetFrameIndex = \(targetFrameIndex) from URL: \(url.path)")
+            print("VisionSceneRenderer: About to load frames with initialFrameIndex = \(targetFrameIndex)")
+            try await animatedSplat.loadFrames(from: url, paused: true, initialFrameIndex: targetFrameIndex)
+            print("VisionSceneRenderer: Finished loading frames")
             modelRenderer = animatedSplat
-            // Register renderer for frame navigation
+            // Register renderer for frame navigation with directory URL
             Task { @MainActor in
-                FrameNavigationManager.shared.registerRenderer(animatedSplat, isSingleFrame: true)
+                FrameNavigationManager.shared.registerRenderer(animatedSplat, isSingleFrame: true, directoryURL: url)
             }
         case .sampleBox:
             modelRenderer = try SampleBoxRenderer(device: device,
@@ -156,17 +161,17 @@ final class VisionSceneRenderer: @unchecked Sendable {
                                                 axis: Constants.rotationAxis)
         }
         
-        // For animated splats, position 1 meter forward from eye
+        // For animated splats, position closer to eye
         // For other models, use the default distance
         let zTranslation: Float
         if case .animatedSplat = model {
-            zTranslation = -1.0 // Move 1 meter forward (negative Z is forward in right-handed coordinates)
+            zTranslation = 0.0 // At eye level (closer than -1.0)
         } else if case .singleFrameSplat = model {
-            zTranslation = -1.0 // Move 1 meter forward (negative Z is forward in right-handed coordinates)
+            zTranslation = 0.0 // At eye level (closer than -1.0)
         } else {
             zTranslation = Constants.modelCenterZ
         }
-        let translationMatrix = matrix4x4_translation(0.0, 0.0, zTranslation)
+        let translationMatrix = matrix4x4_translation(0.0, 1.0, zTranslation) // Move 1 meter higher
         // Turn common 3D GS PLY files rightside-up. This isn't generally meaningful, it just
         // happens to be a useful default for the most common datasets at the moment.
         // For animated splats, rotate 180 degrees around X axis to flip upside down
